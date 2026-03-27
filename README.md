@@ -127,24 +127,76 @@
 
 ## 开发环境
 
-### IDE
-- Keil MDK-ARM (uVision 5)
+### 工具链
+- **arm-none-eabi-gcc**: GNU ARM嵌入式工具链
+- **CMake**: 版本 3.23+ (构建系统)
+- **OpenOCD**: 调试与烧录工具
 
-### 编译器
-- ARM Compiler
+### IDE支持
+- **Keil MDK-ARM** (uVision 5) - 传统方式
+- **VSCode + clangd** - 推荐使用CMake方式
+- **CLion** - 支持CMake原生
 
 ### HAL库
 - STM32L4xx HAL Driver
 
 ## 编译与烧录
 
-### 编译步骤
+### 方式一: CMake + Make (推荐)
 
-1. 打开Keil MDK工程文件: `MDK-ARM/L452CEU6/L452CEU6.uvprojx`
+#### 环境准备
+1. 安装 arm-none-eabi-gcc 工具链
+2. 安装 CMake (3.23+)
+3. 安装 OpenOCD (用于调试和烧录)
+
+#### 编译步骤
+
+```bash
+# 创建构建目录
+mkdir build && cd build
+
+# 配置项目
+cmake ..
+
+# 编译
+cmake --build . -j4
+
+# 生成的文件
+# - L452CEU6.elf: ELF格式可执行文件
+# - L452CEU6.hex: Intel HEX格式
+# - L452CEU6.bin: 二进制格式
+```
+
+#### 烧录步骤
+
+```bash
+# 使用OpenOCD烧录 (在项目根目录执行)
+openocd -f openocd.cfg -c "program build/L452CEU6.elf verify reset exit"
+```
+
+#### 调试
+
+```bash
+# 启动OpenOCD服务器
+openocd -f openocd.cfg
+
+# 另开终端，使用GDB调试
+arm-none-eabi-gdb build/L452CEU6.elf
+(gdb) target remote localhost:3333
+(gdb) monitor reset halt
+(gdb) load
+(gdb) continue
+```
+
+### 方式二: Keil MDK-ARM
+
+#### 编译步骤
+
+1. 打开Keil MDK工程文件: `MDK-ARM/L452CEU6.uvprojx`
 2. 选择目标: `L452CEU6`
 3. 点击编译或按F7
 
-### 烧录步骤
+#### 烧录步骤
 
 1. 连接ST-Link调试器
 2. 点击下载或按F8
@@ -192,21 +244,27 @@
 ## 目录结构
 
 ```
-L452CEU6_ALL_CC/
+L452CEU6_ALL_Cmake/
 ├── Core/
-│   ├── Inc/          # 头文件
+│   ├── Inc/              # 头文件
 │   │   ├── main.h
-│   │   ├── MAX30101.h
+│   │   ├── MAX30101_2.h
 │   │   ├── ADC_ADS124.h
 │   │   └── MIMU.h
-│   └── Src/          # 源文件
+│   └── Src/              # 源文件
 │       ├── main.c
-│       ├── MAX30101.c
+│       ├── MAX30101_2.c
 │       ├── ADC_ADS124.c
 │       └── MIMU.c
-├── Drivers/          # HAL驱动库
-├── MDK-ARM/          # Keil工程文件
-└── README.md         # 本文档
+├── Drivers/              # HAL驱动库
+├── MDK-ARM/              # Keil工程文件
+├── build/                # CMake构建输出目录
+├── CMakeLists.txt        # CMake配置文件
+├── Makefile              # STM32CubeMX生成的Makefile
+├── openocd.cfg           # OpenOCD调试配置
+├── startup_stm32l452xx.s # 启动文件
+├── STM32L452CEUx_FLASH.ld # 链接脚本
+└── README.md             # 本文档
 ```
 
 ## 注意事项
