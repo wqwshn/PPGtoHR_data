@@ -22,6 +22,7 @@
 #include "ADC_ADS124.h"
 #include "MIMU.h"
 #include "MAX30101.h"
+#include "hr_algorithm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -74,23 +75,33 @@ uint8_t Utop_times2 = 5;
 static uint32_t last_red_avg = 0;
 static uint32_t last_ir_avg = 0;
 #else
-// 心率模式变量
-static uint32_t last_avg_green = 0;
+// 心率模式无额外缓存变量 (sum_green 直接计算, 无需缓存上次均值)
 #endif
 
-/* 温度补偿相关 - 1Hz非阻塞测温状态机 */
+/* 温度补偿相关 - 1Hz非阻塞测温状态机 (仅 SpO2 模式使用) */
+#if (CURRENT_WORK_MODE == MODE_SPO2)
 static uint8_t die_temp_int = 0;
 static uint8_t die_temp_frac = 0;
+#endif
+
+/* --- 在线心率算法相关 --- */
+static HR_Config_t hr_config;
+static HR_State_t  hr_state;
+static uint8_t algorithm_initialized = 0;
 
 // 校验函数
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len);
 
 // PPG配置函数
+#if (CURRENT_WORK_MODE == MODE_SPO2)
 static void PPG_Config_SpO2_Hardcoded(void);
+#endif
 static void PPG_Config_Green_Hardcoded(void);
 
-// 蓝牙初始化函数
+// 蓝牙初始化函数 (当前未启用, 保留待用)
+#if 0
 static void BLE_Init(void);
+#endif
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -119,8 +130,8 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  uint8_t ADCbuff[] = "ADC ERROR!";
-  uint8_t MIMUbuff[] = "MIMU ERROR!";
+  char ADCbuff[] = "ADC ERROR!";
+  char MIMUbuff[] = "MIMU ERROR!";
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -174,7 +185,7 @@ int main(void)
 
   /* 2. ADC 检测 (阻塞式) */
   while (!ADC_check()) {
-      HAL_UART_Transmit(&huart2, ADCbuff, sizeof(ADCbuff), 100);
+      HAL_UART_Transmit(&huart2, (uint8_t*)ADCbuff, sizeof(ADCbuff), 100);
       HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n", 2, 100);
       HAL_Delay(500);
   }
@@ -183,7 +194,7 @@ int main(void)
 
   /* 3. MIMU 检测 (阻塞式) */
   while (!MIMU_check()) {
-      HAL_UART_Transmit(&huart2, MIMUbuff, sizeof(MIMUbuff), 100);
+      HAL_UART_Transmit(&huart2, (uint8_t*)MIMUbuff, sizeof(MIMUbuff), 100);
       HAL_Delay(500);
   }
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Found!\r\n", 20, 100);
@@ -218,6 +229,14 @@ int main(void)
 #endif
 
   /* ====================================================================
+   * 心率在线算法初始化
+   * ==================================================================== */
+  HR_GetDefaultConfig(&hr_config);
+  HR_Init(&hr_config, &hr_state);
+  algorithm_initialized = 1;
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: HR Algorithm Init OK\r\n", 29, 1000);
+
+  /* ====================================================================
    * 系统准备就绪
    * ==================================================================== */
 
@@ -238,19 +257,87 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    // 主循环逻辑：以 ADC 采集完成为基准触发发送
+    /* ---- 心率算法: 每秒执行一次解算 ---- */
+    if (algorithm_initialized && hr_state.flag_1s_ready) {
+        float bpm = HR_RunSolver(&hr_state);
+        if (bpm > 0) {
+            /* 构建心率结果数据包 */
+            uint8_t hr_packet[20];
+            hr_packet[0] = 0xAA;       /* 帧头 */
+            hr_packet[1] = 0xCC;
+
+            /* 融合心率 (x10, 0.1 BPM 精度) */
+            uint16_t hr_x10 = (uint16_t)(bpm * 10.0f + 0.5f);
+            hr_packet[2] = (hr_x10 >> 8) & 0xFF;
+            hr_packet[3] = hr_x10 & 0xFF;
+
+            /* 运动标志 */
+            hr_packet[4] = hr_state.is_motion;
+
+            /* 窗口填充状态 */
+            hr_packet[5] = hr_state.win_filled;
+
+            /* LMS-HF 路径 BPM (x10) */
+            uint16_t hf_x10 = (uint16_t)(hr_state.hr_lms_hf * 600.0f + 0.5f);
+            hr_packet[6] = (hf_x10 >> 8) & 0xFF;
+            hr_packet[7] = hf_x10 & 0xFF;
+
+            /* LMS-ACC 路径 BPM (x10) */
+            uint16_t acc_x10 = (uint16_t)(hr_state.hr_lms_acc * 600.0f + 0.5f);
+            hr_packet[8] = (acc_x10 >> 8) & 0xFF;
+            hr_packet[9] = acc_x10 & 0xFF;
+
+            /* FFT 路径 BPM (x10) */
+            uint16_t fft_x10 = (uint16_t)(hr_state.hr_fft * 600.0f + 0.5f);
+            hr_packet[10] = (fft_x10 >> 8) & 0xFF;
+            hr_packet[11] = fft_x10 & 0xFF;
+
+            /* PPG 信号均值 (窗口第一个通道的平均值, 用于信号强度) */
+            /* 使用 buf_1s_ppg 的均值作为信号强度参考 */
+            float ppg_mean = 0;
+            for (int i = 0; i < HR_STEP_SAMPLES; i++) ppg_mean += hr_state.buf_1s_ppg[i];
+            ppg_mean /= HR_STEP_SAMPLES;
+            uint16_t ppg_u16 = (uint16_t)(ppg_mean + 0.5f);
+            hr_packet[12] = (ppg_u16 >> 8) & 0xFF;
+            hr_packet[13] = ppg_u16 & 0xFF;
+
+            /* ACC 幅值 std (x100) */
+            /* 运动检测中已计算, 这里简化: 直接从 motion threshold 判断 */
+            hr_packet[14] = hr_state.motion_calibrated;
+
+            /* 时间戳 (秒, 低16位) */
+            static uint16_t ts = 0;
+            ts++;
+            hr_packet[15] = (ts >> 8) & 0xFF;
+            hr_packet[16] = ts & 0xFF;
+
+            /* 校准状态字节 */
+            hr_packet[17] = (hr_state.calib_windows_done < 8) ? hr_state.calib_windows_done : 8;
+
+            /* XOR 校验 */
+            uint8_t xor_val = 0;
+            for (int i = 2; i < 18; i++) xor_val ^= hr_packet[i];
+            hr_packet[18] = xor_val;
+
+            /* 帧尾 */
+            hr_packet[19] = 0xCC;
+
+            HAL_UART_Transmit_DMA(&huart2, hr_packet, 20);
+        }
+    }
+
+    /* ---- 数据采集: ADC 完成后触发 ---- */
     if(ADC_1to4Voltage_flag == 4){
 
-      // --- 1. 打包 ADC ---
+      /* --- 1. 打包 ADC (保留原逻辑) --- */
       // 数据已由中断填充在 allData[2] ~ allData[9]
 
-      // --- 2. 打包 ACC ---
-      // 需求: 发送高位，传感器先发低后发高 -> 高位在 1, 3, 5
+      /* --- 2. 打包 ACC 高位 (保留原逻辑) --- */
       allData[10] = ACC_XYZ[1]; // X High
       allData[11] = ACC_XYZ[3]; // Y High
       allData[12] = ACC_XYZ[5]; // Z High
 
-      // --- 3. FIFO 排空与 PPG 数据处理 ---
+      /* --- 3. PPG 数据采集 --- */
       uint8_t wr_ptr = MAX_ReadOneByte(FIFO_WR_PTR_REG);
       uint8_t rd_ptr = MAX_ReadOneByte(FIFO_RD_PTR_REG);
       uint8_t sample_count = (wr_ptr - rd_ptr) & 0x1F;
@@ -308,36 +395,52 @@ int main(void)
       allData[TEMP_START_INDEX + 1] = die_temp_frac;
 
 #else
-      /* --- 3.3 心率模式打包逻辑 --- */
+      /* --- 3.3 心率模式: 计算 PPG 均值用于算法 + 保留原始数据包 --- */
       uint32_t sum_green = 0;
-      uint8_t buf[3];  // 每个样本3字节（绿光）
+      uint8_t buf[3];
 
       for (uint8_t i = 0; i < sample_count; i++) {
           MAX_ReadFIFO_Burst(buf, 3);
-          uint32_t green_val = ((buf[0] << 16) | (buf[1] << 8) | buf[2]) & 0x03FFFF;
-          sum_green += green_val;
+          sum_green += ((buf[0] << 16) | (buf[1] << 8) | buf[2]) & 0x03FFFF;
       }
 
+      /* 原始数据包: 保留 sum + count 格式 */
       allData[PPG_START_INDEX]     = (sum_green >> 16) & 0xFF;
       allData[PPG_START_INDEX + 1] = (sum_green >> 8)  & 0xFF;
       allData[PPG_START_INDEX + 2] =  sum_green        & 0xFF;
       allData[PPG_START_INDEX + 3] = sample_count;
 
-      // 扩展位：补零并加入模式标志位
-      allData[TEMP_START_INDEX] = 0x00;      // 补零
-      allData[TEMP_START_INDEX + 1] = 0xFF;  // 心率模式专属标志位
+      /* 算法数据: 推送 float 采样点 */
+      if (algorithm_initialized && sample_count > 0) {
+          float ppg_val = (float)sum_green / (float)sample_count;
+
+          /* ACC 完整 16 位数据 */
+          int16_t ax_raw = (int16_t)((ACC_XYZ[1] << 8) | ACC_XYZ[0]);
+          int16_t ay_raw = (int16_t)((ACC_XYZ[3] << 8) | ACC_XYZ[2]);
+          int16_t az_raw = (int16_t)((ACC_XYZ[5] << 8) | ACC_XYZ[4]);
+
+          /* HF/ADC: 使用第一个 ADC 通道 (allData[8..9] = 桥中1) */
+          int16_t hf_raw = (int16_t)((allData[8] << 8) | allData[9]);
+
+          HR_PushSample(&hr_state, ppg_val,
+                        (float)ax_raw, (float)ay_raw, (float)az_raw,
+                        (float)hf_raw);
+      }
+
+      allData[TEMP_START_INDEX] = 0x00;
+      allData[TEMP_START_INDEX + 1] = 0xFF;
 #endif
 
-      // --- 4. 计算校验位 (校验从 allData[2] 开始的 17 个字节) ---
+      /* --- 4. 计算校验位 (校验从 allData[2] 开始的 17 个字节) --- */
       allData[19] = CheckXOR(&allData[2], XOR_CHECK_LEN);
 
-      // --- 5. 填充帧尾 ---
+      /* --- 5. 填充帧尾 --- */
       allData[20] = 0xCC;
 
-      // --- 6. DMA 发送 (21 字节) ---
+      /* --- 6. DMA 发送 (21 字节) --- */
       HAL_UART_Transmit_DMA(&huart2, allData, PACKET_LEN);
 
-      // --- 7. 清除标志位 ---
+      /* --- 7. 清除标志位 --- */
       ADC_1to4Voltage_flag = 0;
     }
 
@@ -396,7 +499,8 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
-// 蓝牙初始化
+// 蓝牙初始化 (当前未启用, 需要时移除 #if 0 守卫)
+#if 0
 static void BLE_Init(void)
 {
     static const uint8_t CMD_WAKE[]     = "<ST_WAKE=FOREVER>";
@@ -441,6 +545,7 @@ static void BLE_Init(void)
     HAL_UART_Transmit(&huart2, CMD_MIN_GAP, sizeof(CMD_MIN_GAP)-1, 0xFFFF);
     HAL_Delay(50);
 }
+#endif /* BLE_Init 守卫结束 */
 
 // 校验函数
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len)
@@ -454,7 +559,8 @@ uint8_t CheckXOR(uint8_t *Buf, uint8_t Len)
   return x;
 }
 
-// PPG 血氧模式硬编码配置
+// PPG 血氧模式硬编码配置 (仅 SpO2 模式编译)
+#if (CURRENT_WORK_MODE == MODE_SPO2)
 static void PPG_Config_SpO2_Hardcoded(void)
 {
     // --- 1. 工作模式配置 (血氧模式) ---
@@ -479,6 +585,7 @@ static void PPG_Config_SpO2_Hardcoded(void)
     MAX_WriteOneByte(OVF_COUNTER_REG, 0x00);
     MAX_WriteOneByte(FIFO_RD_PTR_REG, 0x00);
 }
+#endif /* MODE_SPO2 守卫结束 */
 
 // PPG 绿光心率模式硬编码配置
 static void PPG_Config_Green_Hardcoded(void)
