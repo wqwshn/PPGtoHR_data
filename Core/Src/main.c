@@ -22,6 +22,7 @@
 #include "ADC_ADS124.h"
 #include "MIMU.h"
 #include "MAX30101.h"
+#include "hr_algorithm.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -81,6 +82,11 @@ static uint32_t last_avg_green = 0;
 /* 温度补偿相关 - 1Hz非阻塞测温状态机 */
 static uint8_t die_temp_int = 0;
 static uint8_t die_temp_frac = 0;
+
+/* --- 在线心率算法相关 --- */
+static HR_Config_t hr_config;
+static HR_State_t  hr_state;
+static uint8_t algorithm_initialized = 0;
 
 // 校验函数
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len);
@@ -218,6 +224,14 @@ int main(void)
 #endif
 
   /* ====================================================================
+   * 心率在线算法初始化
+   * ==================================================================== */
+  HR_GetDefaultConfig(&hr_config);
+  HR_Init(&hr_config, &hr_state);
+  algorithm_initialized = 1;
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: HR Algorithm Init OK\r\n", 29, 1000);
+
+  /* ====================================================================
    * 系统准备就绪
    * ==================================================================== */
 
@@ -238,19 +252,27 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    // 主循环逻辑：以 ADC 采集完成为基准触发发送
+    /* ---- 心率算法: 每秒执行一次解算 ---- */
+    if (algorithm_initialized && hr_state.flag_1s_ready) {
+        float bpm = HR_RunSolver(&hr_state);
+        if (bpm > 0) {
+            /* 调试输出: 通过 UART 发送心率结果 */
+            /* 将在 Task 7 中实现完整的协议包 */
+        }
+    }
+
+    /* ---- 数据采集: ADC 完成后触发 ---- */
     if(ADC_1to4Voltage_flag == 4){
 
-      // --- 1. 打包 ADC ---
+      /* --- 1. 打包 ADC (保留原逻辑) --- */
       // 数据已由中断填充在 allData[2] ~ allData[9]
 
-      // --- 2. 打包 ACC ---
-      // 需求: 发送高位，传感器先发低后发高 -> 高位在 1, 3, 5
+      /* --- 2. 打包 ACC 高位 (保留原逻辑) --- */
       allData[10] = ACC_XYZ[1]; // X High
       allData[11] = ACC_XYZ[3]; // Y High
       allData[12] = ACC_XYZ[5]; // Z High
 
-      // --- 3. FIFO 排空与 PPG 数据处理 ---
+      /* --- 3. PPG 数据采集 --- */
       uint8_t wr_ptr = MAX_ReadOneByte(FIFO_WR_PTR_REG);
       uint8_t rd_ptr = MAX_ReadOneByte(FIFO_RD_PTR_REG);
       uint8_t sample_count = (wr_ptr - rd_ptr) & 0x1F;
@@ -308,36 +330,52 @@ int main(void)
       allData[TEMP_START_INDEX + 1] = die_temp_frac;
 
 #else
-      /* --- 3.3 心率模式打包逻辑 --- */
+      /* --- 3.3 心率模式: 计算 PPG 均值用于算法 + 保留原始数据包 --- */
       uint32_t sum_green = 0;
-      uint8_t buf[3];  // 每个样本3字节（绿光）
+      uint8_t buf[3];
 
       for (uint8_t i = 0; i < sample_count; i++) {
           MAX_ReadFIFO_Burst(buf, 3);
-          uint32_t green_val = ((buf[0] << 16) | (buf[1] << 8) | buf[2]) & 0x03FFFF;
-          sum_green += green_val;
+          sum_green += ((buf[0] << 16) | (buf[1] << 8) | buf[2]) & 0x03FFFF;
       }
 
+      /* 原始数据包: 保留 sum + count 格式 */
       allData[PPG_START_INDEX]     = (sum_green >> 16) & 0xFF;
       allData[PPG_START_INDEX + 1] = (sum_green >> 8)  & 0xFF;
       allData[PPG_START_INDEX + 2] =  sum_green        & 0xFF;
       allData[PPG_START_INDEX + 3] = sample_count;
 
-      // 扩展位：补零并加入模式标志位
-      allData[TEMP_START_INDEX] = 0x00;      // 补零
-      allData[TEMP_START_INDEX + 1] = 0xFF;  // 心率模式专属标志位
+      /* 算法数据: 推送 float 采样点 */
+      if (algorithm_initialized && sample_count > 0) {
+          float ppg_val = (float)sum_green / (float)sample_count;
+
+          /* ACC 完整 16 位数据 */
+          int16_t ax_raw = (int16_t)((ACC_XYZ[1] << 8) | ACC_XYZ[0]);
+          int16_t ay_raw = (int16_t)((ACC_XYZ[3] << 8) | ACC_XYZ[2]);
+          int16_t az_raw = (int16_t)((ACC_XYZ[5] << 8) | ACC_XYZ[4]);
+
+          /* HF/ADC: 使用第一个 ADC 通道 (allData[8..9] = 桥中1) */
+          int16_t hf_raw = (int16_t)((allData[8] << 8) | allData[9]);
+
+          HR_PushSample(&hr_state, ppg_val,
+                        (float)ax_raw, (float)ay_raw, (float)az_raw,
+                        (float)hf_raw);
+      }
+
+      allData[TEMP_START_INDEX] = 0x00;
+      allData[TEMP_START_INDEX + 1] = 0xFF;
 #endif
 
-      // --- 4. 计算校验位 (校验从 allData[2] 开始的 17 个字节) ---
+      /* --- 4. 计算校验位 (校验从 allData[2] 开始的 17 个字节) --- */
       allData[19] = CheckXOR(&allData[2], XOR_CHECK_LEN);
 
-      // --- 5. 填充帧尾 ---
+      /* --- 5. 填充帧尾 --- */
       allData[20] = 0xCC;
 
-      // --- 6. DMA 发送 (21 字节) ---
+      /* --- 6. DMA 发送 (21 字节) --- */
       HAL_UART_Transmit_DMA(&huart2, allData, PACKET_LEN);
 
-      // --- 7. 清除标志位 ---
+      /* --- 7. 清除标志位 --- */
       ADC_1to4Voltage_flag = 0;
     }
 
