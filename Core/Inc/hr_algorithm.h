@@ -25,7 +25,7 @@ extern "C" {
 #define HR_STEP_SEC         1       /* 滑动步长 1 秒 */
 #define HR_WIN_SAMPLES      (HR_FS * HR_WIN_SEC)    /* 1000 点 */
 #define HR_STEP_SAMPLES     (HR_FS * HR_STEP_SEC)   /* 125 点 */
-#define HR_NUM_CHANNELS     5       /* PPG, ACCx, ACCy, ACCz, HF */
+#define HR_NUM_CHANNELS     6       /* PPG, ACCx, ACCy, ACCz, HF1, HF2 */
 #define HR_FFT_LEN          4096    /* FFT 点数 (实数 RFFT) */
 #define HR_MAX_PEAKS        20      /* 最大候选峰值数 */
 #define HR_MAX_ORDER        16      /* LMS 滤波器最大阶数 */
@@ -74,6 +74,7 @@ typedef struct {
     float   buf_1s_accy[HR_STEP_SAMPLES];
     float   buf_1s_accz[HR_STEP_SAMPLES];
     float   buf_1s_hf[HR_STEP_SAMPLES];
+    float   buf_1s_hf2[HR_STEP_SAMPLES];
     volatile uint16_t sample_idx;   /* 当前 1 秒内采样索引 */
     volatile uint8_t  flag_1s_ready;/* 1 秒数据就绪标志 */
 
@@ -83,6 +84,7 @@ typedef struct {
     float   win_accy[HR_WIN_SAMPLES];
     float   win_accz[HR_WIN_SAMPLES];
     float   win_hf[HR_WIN_SAMPLES];
+    float   win_hf2[HR_WIN_SAMPLES];
     uint8_t win_filled;             /* 窗口是否已填满至少一次 */
 
     /* --- 8 秒滑动窗口 - IIR 滤波后数据 (仅追加新滤波数据 + 平移) --- */
@@ -91,6 +93,7 @@ typedef struct {
     float   filt_accy[HR_WIN_SAMPLES];
     float   filt_accz[HR_WIN_SAMPLES];
     float   filt_hf[HR_WIN_SAMPLES];
+    float   filt_hf2[HR_WIN_SAMPLES];
 
     /* --- IIR 带通滤波器状态 (5 通道 x 4 biquad 节, 流式) --- */
     arm_biquad_casd_df1_inst_f32 biquad_ppg;
@@ -98,16 +101,19 @@ typedef struct {
     arm_biquad_casd_df1_inst_f32 biquad_accy;
     arm_biquad_casd_df1_inst_f32 biquad_accz;
     arm_biquad_casd_df1_inst_f32 biquad_hf;
+    arm_biquad_casd_df1_inst_f32 biquad_hf2;
     float   iir_state_ppg[16];     /* 4 sections x 4 state */
     float   iir_state_accx[16];
     float   iir_state_accy[16];
     float   iir_state_accz[16];
     float   iir_state_hf[16];
+    float   iir_state_hf2[16];
     float   iir_filt_1s_ppg[HR_STEP_SAMPLES];   /* 1 秒滤波临时输出 */
     float   iir_filt_1s_accx[HR_STEP_SAMPLES];
     float   iir_filt_1s_accy[HR_STEP_SAMPLES];
     float   iir_filt_1s_accz[HR_STEP_SAMPLES];
     float   iir_filt_1s_hf[HR_STEP_SAMPLES];
+    float   iir_filt_1s_hf2[HR_STEP_SAMPLES];
 
     /* --- FFT 工作缓冲区 --- */
     float   fft_input[HR_FFT_LEN];
@@ -172,8 +178,10 @@ typedef struct {
     uint16_t prev_order_acc;        /* 上一次 ACC 路径 LMS 阶数 */
 
     /* --- 信号质量评估 (调试用) --- */
-    float   hf_signal_std;          /* HF 信号 AC 幅值 (BPF 后标准差, LSB) */
-    float   hf_ppg_corr;            /* HF-PPG Pearson 相关系数 (-1~+1) */
+    float   hf1_signal_std;         /* HF1(桥顶1) AC 幅值 (BPF 后标准差, LSB) */
+    float   hf2_signal_std;         /* HF2(桥顶2) AC 幅值 (BPF 后标准差, LSB) */
+    float   hf1_ppg_corr;           /* HF1-PPG Pearson 相关系数 (-1~+1) */
+    float   hf2_ppg_corr;           /* HF2-PPG Pearson 相关系数 (-1~+1) */
     float   acc_ppg_corr;           /* ACC-PPG Pearson 相关系数 (-1~+1, 最优轴) */
 } HR_State_t;
 
@@ -195,10 +203,12 @@ void HR_Init(const HR_Config_t *config, HR_State_t *state);
  * @param accx:   ACC X 采样值
  * @param accy:   ACC Y 采样值
  * @param accz:   ACC Z 采样值
- * @param hf:     HF/ADC 采样值
+ * @param hf1:    HF1/ADC 采样值 (桥顶1)
+ * @param hf2:    HF2/ADC 采样值 (桥顶2)
  */
 void HR_PushSample(HR_State_t *state,
-                   float ppg, float accx, float accy, float accz, float hf);
+                   float ppg, float accx, float accy, float accz,
+                   float hf1, float hf2);
 
 /**
  * @brief 执行一次完整的 8 秒窗口心率解算 (由主循环调用)

@@ -279,8 +279,8 @@ int main(void)
     if (algorithm_initialized && hr_state.flag_1s_ready) {
         float bpm = HR_RunSolver(&hr_state);
         if (bpm > 0) {
-            /* 构建心率结果数据包 (27 字节) */
-            uint8_t hr_packet[27];
+            /* 构建心率结果数据包 (31 字节) */
+            uint8_t hr_packet[31];
             hr_packet[0] = 0xAA;       /* 帧头 */
             hr_packet[1] = 0xCC;
 
@@ -333,31 +333,42 @@ int main(void)
             /* 采样率 (Hz) - 固定 125 */
             hr_packet[18] = HR_FS;
 
-            /* HF AC 幅值 (x100 mV, LSB std -> mV) */
-            float hf_mv = hr_state.hf_signal_std * HR_HF_LSB_TO_MV;
-            uint16_t hf_mv_x100 = (uint16_t)(hf_mv * 100.0f + 0.5f);
-            hr_packet[19] = (hf_mv_x100 >> 8) & 0xFF;
-            hr_packet[20] = hf_mv_x100 & 0xFF;
+            /* HF1 AC 幅值 (x100 mV, LSB std -> mV) -- 桥顶1 */
+            float hf1_mv = hr_state.hf1_signal_std * HR_HF_LSB_TO_MV;
+            uint16_t hf1_mv_x100 = (uint16_t)(hf1_mv * 100.0f + 0.5f);
+            hr_packet[19] = (hf1_mv_x100 >> 8) & 0xFF;
+            hr_packet[20] = hf1_mv_x100 & 0xFF;
 
-            /* HF-PPG 相关系数 (x10000, signed) */
-            int16_t hf_corr_x10000 = (int16_t)(hr_state.hf_ppg_corr * 10000.0f);
-            hr_packet[21] = (uint8_t)((hf_corr_x10000 >> 8) & 0xFF);
-            hr_packet[22] = (uint8_t)(hf_corr_x10000 & 0xFF);
+            /* HF1-PPG 相关系数 (x10000, signed) */
+            int16_t hf1_corr_x10000 = (int16_t)(hr_state.hf1_ppg_corr * 10000.0f);
+            hr_packet[21] = (uint8_t)((hf1_corr_x10000 >> 8) & 0xFF);
+            hr_packet[22] = (uint8_t)(hf1_corr_x10000 & 0xFF);
 
-            /* ACC-PPG 相关系数 (x10000, signed) */
+            /* ACC-PPG 相关系数 (x10000, signed, 最优轴) */
             int16_t acc_corr_x10000 = (int16_t)(hr_state.acc_ppg_corr * 10000.0f);
             hr_packet[23] = (uint8_t)((acc_corr_x10000 >> 8) & 0xFF);
             hr_packet[24] = (uint8_t)(acc_corr_x10000 & 0xFF);
 
-            /* XOR 校验 (覆盖 bytes[2..24]) */
+            /* HF2 AC 幅值 (x100 mV) -- 桥顶2 */
+            float hf2_mv = hr_state.hf2_signal_std * HR_HF_LSB_TO_MV;
+            uint16_t hf2_mv_x100 = (uint16_t)(hf2_mv * 100.0f + 0.5f);
+            hr_packet[25] = (hf2_mv_x100 >> 8) & 0xFF;
+            hr_packet[26] = hf2_mv_x100 & 0xFF;
+
+            /* HF2-PPG 相关系数 (x10000, signed) */
+            int16_t hf2_corr_x10000 = (int16_t)(hr_state.hf2_ppg_corr * 10000.0f);
+            hr_packet[27] = (uint8_t)((hf2_corr_x10000 >> 8) & 0xFF);
+            hr_packet[28] = (uint8_t)(hf2_corr_x10000 & 0xFF);
+
+            /* XOR 校验 (覆盖 bytes[2..28]) */
             uint8_t xor_val = 0;
-            for (int i = 2; i < 25; i++) xor_val ^= hr_packet[i];
-            hr_packet[25] = xor_val;
+            for (int i = 2; i < 29; i++) xor_val ^= hr_packet[i];
+            hr_packet[29] = xor_val;
 
             /* 帧尾 */
-            hr_packet[26] = 0xCC;
+            hr_packet[30] = 0xCC;
 
-            HAL_UART_Transmit_DMA(&huart2, hr_packet, 27);
+            HAL_UART_Transmit_DMA(&huart2, hr_packet, 31);
         }
     }
 #endif /* !ENABLE_RAW_DATA_PACKET */
@@ -456,12 +467,14 @@ int main(void)
           int16_t ay_raw = (int16_t)((ACC_XYZ[3] << 8) | ACC_XYZ[2]);
           int16_t az_raw = (int16_t)((ACC_XYZ[5] << 8) | ACC_XYZ[4]);
 
-          /* HF/ADC: 使用第一个 ADC 通道 (allData[8..9] = 桥中1) */
-          int16_t hf_raw = (int16_t)((allData[8] << 8) | allData[9]);
+          /* HF1/ADC: 桥顶1 (allData[4..5]) */
+          int16_t hf1_raw = (int16_t)((allData[4] << 8) | allData[5]);
+          /* HF2/ADC: 桥顶2 (allData[2..3]) */
+          int16_t hf2_raw = (int16_t)((allData[2] << 8) | allData[3]);
 
           HR_PushSample(&hr_state, ppg_val,
                         (float)ax_raw, (float)ay_raw, (float)az_raw,
-                        (float)hf_raw);
+                        (float)hf1_raw, (float)hf2_raw);
       }
 #endif /* !ENABLE_RAW_DATA_PACKET */
 

@@ -475,9 +475,11 @@ class Dashboard(QMainWindow):
             (t["calibration"], "_lbl_calib", "-- / 8"),
             (t["window"], "_lbl_window", "--"),
             (t["sampling_rate"], "_lbl_sample_rate", "-- Hz"),
-            ("HF AC:", "_lbl_hf_ac", "--"),
-            ("HF corr:", "_lbl_hf_corr", "--"),
+            ("HF1 AC:", "_lbl_hf1_ac", "--"),
+            ("HF1 corr:", "_lbl_hf1_corr", "--"),
             ("ACC corr:", "_lbl_acc_corr", "--"),
+            ("HF2 AC:", "_lbl_hf2_ac", "--"),
+            ("HF2 corr:", "_lbl_hf2_corr", "--"),
         ]
         self._info_name_labels = []
         for row_idx, (label_text, attr_name, default) in enumerate(info_items):
@@ -585,9 +587,11 @@ class Dashboard(QMainWindow):
             "timestamp": pkt.timestamp,
             "calib_progress": pkt.calib_progress,
             "sampling_rate": pkt.sampling_rate,
-            "hf_ac_mv": pkt.hf_ac_mv,
-            "hf_ppg_corr": pkt.hf_ppg_corr,
+            "hf1_ac_mv": pkt.hf1_ac_mv,
+            "hf1_ppg_corr": pkt.hf1_ppg_corr,
             "acc_ppg_corr": pkt.acc_ppg_corr,
+            "hf2_ac_mv": pkt.hf2_ac_mv,
+            "hf2_ppg_corr": pkt.hf2_ppg_corr,
         })
 
         # 心率数字
@@ -630,10 +634,12 @@ class Dashboard(QMainWindow):
         self._lbl_window.setText(t["ready"] if pkt.win_filled else t["filling"])
         self._lbl_sample_rate.setText(f"{pkt.sampling_rate} Hz")
 
-        # HF 信号质量
-        self._lbl_hf_ac.setText(f"{pkt.hf_ac_mv:.2f} mV")
-        self._lbl_hf_corr.setText(f"{pkt.hf_ppg_corr:.3f}")
+        # 信号质量
+        self._lbl_hf1_ac.setText(f"{pkt.hf1_ac_mv:.2f} mV")
+        self._lbl_hf1_corr.setText(f"{pkt.hf1_ppg_corr:.3f}")
         self._lbl_acc_corr.setText(f"{pkt.acc_ppg_corr:.3f}")
+        self._lbl_hf2_ac.setText(f"{pkt.hf2_ac_mv:.2f} mV")
+        self._lbl_hf2_corr.setText(f"{pkt.hf2_ppg_corr:.3f}")
 
         # 趋势图
         self._trend_bpm.append(bpm)
@@ -708,10 +714,12 @@ class Dashboard(QMainWindow):
         self._lbl_window.setText("--")
         self._lbl_sample_rate.setText("-- Hz")
 
-        # 重置 HF 信号质量标签
-        self._lbl_hf_ac.setText("--")
-        self._lbl_hf_corr.setText("--")
+        # 重置信号质量标签
+        self._lbl_hf1_ac.setText("--")
+        self._lbl_hf1_corr.setText("--")
         self._lbl_acc_corr.setText("--")
+        self._lbl_hf2_ac.setText("--")
+        self._lbl_hf2_corr.setText("--")
 
         # 重置状态栏
         self._status_label.setText(t["clear_confirm"])
@@ -739,7 +747,8 @@ class Dashboard(QMainWindow):
                 "time", "fused_bpm", "is_motion", "win_filled",
                 "hr_lms_hf", "hr_lms_acc", "hr_fft",
                 "ppg_mean", "motion_calibrated", "timestamp", "calib_progress",
-                "sampling_rate", "hf_ac_mv", "hf_ppg_corr", "acc_ppg_corr",
+                "sampling_rate", "hf1_ac_mv", "hf1_ppg_corr", "acc_ppg_corr",
+                "hf2_ac_mv", "hf2_ppg_corr",
             ]
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -825,6 +834,11 @@ class Dashboard(QMainWindow):
             timestamp=t,
             calib_progress=min(t, 8),
             sampling_rate=125,
+            hf1_ac_mv=round(0.5 + (hash(t * 7) % 100) / 100.0, 2),
+            hf1_ppg_corr=round(0.3 + (hash(t * 13) % 50) / 100.0, 3),
+            acc_ppg_corr=round(0.2 + (hash(t * 17) % 40) / 100.0, 3),
+            hf2_ac_mv=round(0.4 + (hash(t * 11) % 80) / 100.0, 2),
+            hf2_ppg_corr=round(0.25 + (hash(t * 19) % 45) / 100.0, 3),
         )
         self.update_data(pkt)
 

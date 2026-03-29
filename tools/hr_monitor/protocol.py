@@ -1,6 +1,6 @@
 """
 PPG Heart Rate Monitor - 协议定义与帧解析
-27 字节心率结果包 (1Hz, 蓝牙/串口 115200bps):
+31 字节心率结果包 (1Hz, 蓝牙/串口 115200bps):
   偏移  字段                类型        说明
   0-1   帧头                uint8 x2    0xAA, 0xCC
   2-3   融合心率 BPM        uint16 BE   x10 精度 (72.5 = 725)
@@ -14,11 +14,13 @@ PPG Heart Rate Monitor - 协议定义与帧解析
   15-16 时间戳              uint16 BE   秒计数器
   17    校准窗口进度         uint8       0-8
   18    采样率              uint8       固定 125
-  19-20 HF AC 幅值           uint16 BE   x100 mV (0.00~655.35 mV)
-  21-22 HF-PPG 相关系数      int16 BE   x10000 (-1.0~+1.0)
-  23-24 ACC-PPG 相关系数     int16 BE   x10000 (-1.0~+1.0)
-  25    XOR 校验             uint8       bytes[2..24] 异或
-  26    帧尾                uint8       0xCC
+  19-20 HF1 AC 幅值          uint16 BE   x100 mV (桥顶1)
+  21-22 HF1-PPG 相关系数     int16 BE   x10000 (-1.0~+1.0)
+  23-24 ACC-PPG 相关系数     int16 BE   x10000 (-1.0~+1.0, 最优轴)
+  25-26 HF2 AC 幅值          uint16 BE   x100 mV (桥顶2)
+  27-28 HF2-PPG 相关系数     int16 BE   x10000 (-1.0~+1.0)
+  29    XOR 校验             uint8       bytes[2..28] 异或
+  30    帧尾                uint8       0xCC
 """
 
 from __future__ import annotations
@@ -30,11 +32,11 @@ HEADER_BYTE_0 = 0xAA
 HEADER_BYTE_1 = 0xCC
 FOOTER_BYTE = 0xCC
 
-PACKET_LEN = 27
+PACKET_LEN = 31
 PAYLOAD_START = 2    # 帧头后的 payload 起始偏移
-PAYLOAD_END = 25     # XOR 校验前一字节 (含)
+PAYLOAD_END = 29     # XOR 校验前一字节 (含)
 XOR_START = 2        # XOR 计算起始偏移
-XOR_END = 24         # XOR 计算结束偏移 (含)
+XOR_END = 28         # XOR 计算结束偏移 (含)
 
 
 @dataclass
@@ -51,17 +53,26 @@ class HRPacket:
     timestamp: int          # 秒计数器
     calib_progress: int     # 校准进度 0-8
     sampling_rate: int      # 采样率 (Hz)
-    hf_ac_mv: float         # HF AC 幅值 (mV)
-    hf_ppg_corr: float      # HF-PPG 相关系数 (-1~+1)
-    acc_ppg_corr: float     # ACC-PPG 相关系数 (-1~+1)
+    hf1_ac_mv: float        # HF1(桥顶1) AC 幅值 (mV)
+    hf1_ppg_corr: float     # HF1-PPG 相关系数 (-1~+1)
+    acc_ppg_corr: float     # ACC-PPG 相关系数 (-1~+1, 最优轴)
+    hf2_ac_mv: float        # HF2(桥顶2) AC 幅值 (mV)
+    hf2_ppg_corr: float     # HF2-PPG 相关系数 (-1~+1)
+
+
+def _decode_int16(raw: int) -> int:
+    """大端 uint16 转 int16 有符号"""
+    if raw >= 0x8000:
+        return raw - 0x10000
+    return raw
 
 
 def parse_hr_packet(data: bytes) -> Optional[HRPacket]:
     """
-    解析 21 字节心率结果包.
+    解析 31 字节心率结果包.
 
     Args:
-        data: 完整的 21 字节原始帧
+        data: 完整的 31 字节原始帧
 
     Returns:
         HRPacket 解析成功, None 校验失败
@@ -74,14 +85,14 @@ def parse_hr_packet(data: bytes) -> Optional[HRPacket]:
         return None
 
     # 校验帧尾
-    if data[26] != FOOTER_BYTE:
+    if data[30] != FOOTER_BYTE:
         return None
 
-    # XOR 校验: bytes[2..24] 异或 == data[25]
+    # XOR 校验: bytes[2..28] 异或 == data[29]
     xor_val = 0
     for i in range(XOR_START, XOR_END + 1):
         xor_val ^= data[i]
-    if xor_val != data[25]:
+    if xor_val != data[29]:
         return None
 
     # 大端解析各字段
@@ -93,14 +104,11 @@ def parse_hr_packet(data: bytes) -> Optional[HRPacket]:
     timestamp_raw = (data[15] << 8) | data[16]
 
     # 信号质量字段
-    hf_ac_mv_raw = (data[19] << 8) | data[20]
-    hf_corr_raw = (data[21] << 8) | data[22]
-    acc_corr_raw = (data[23] << 8) | data[24]
-    # int16 有符号解码
-    if hf_corr_raw >= 0x8000:
-        hf_corr_raw -= 0x10000
-    if acc_corr_raw >= 0x8000:
-        acc_corr_raw -= 0x10000
+    hf1_ac_raw = (data[19] << 8) | data[20]
+    hf1_corr_raw = _decode_int16((data[21] << 8) | data[22])
+    acc_corr_raw = _decode_int16((data[23] << 8) | data[24])
+    hf2_ac_raw = (data[25] << 8) | data[26]
+    hf2_corr_raw = _decode_int16((data[27] << 8) | data[28])
 
     return HRPacket(
         fused_bpm=fused_bpm_raw / 10.0,
@@ -114,7 +122,9 @@ def parse_hr_packet(data: bytes) -> Optional[HRPacket]:
         timestamp=timestamp_raw,
         calib_progress=data[17],
         sampling_rate=data[18],
-        hf_ac_mv=hf_ac_mv_raw / 100.0,
-        hf_ppg_corr=hf_corr_raw / 10000.0,
+        hf1_ac_mv=hf1_ac_raw / 100.0,
+        hf1_ppg_corr=hf1_corr_raw / 10000.0,
         acc_ppg_corr=acc_corr_raw / 10000.0,
+        hf2_ac_mv=hf2_ac_raw / 100.0,
+        hf2_ppg_corr=hf2_corr_raw / 10000.0,
     )

@@ -74,13 +74,14 @@ void HR_Init(const HR_Config_t *config, HR_State_t *state)
         HR_GetDefaultConfig(&s_config);
     }
 
-    /* --- 初始化 5 个 IIR biquad 滤波器实例 --- */
+    /* --- 初始化 6 个 IIR biquad 滤波器实例 --- */
     /* 每个通道: 4 个 biquad 节, 使用预计算的 HR_BPF_COEFFS 系数 */
     arm_biquad_cascade_df1_init_f32(&state->biquad_ppg,  4, (float *)HR_BPF_COEFFS, state->iir_state_ppg);
     arm_biquad_cascade_df1_init_f32(&state->biquad_accx, 4, (float *)HR_BPF_COEFFS, state->iir_state_accx);
     arm_biquad_cascade_df1_init_f32(&state->biquad_accy, 4, (float *)HR_BPF_COEFFS, state->iir_state_accy);
     arm_biquad_cascade_df1_init_f32(&state->biquad_accz, 4, (float *)HR_BPF_COEFFS, state->iir_state_accz);
     arm_biquad_cascade_df1_init_f32(&state->biquad_hf,   4, (float *)HR_BPF_COEFFS, state->iir_state_hf);
+    arm_biquad_cascade_df1_init_f32(&state->biquad_hf2,  4, (float *)HR_BPF_COEFFS, state->iir_state_hf2);
 
     /* --- 初始化 LMS HF 路径: 2 级级联 --- */
     for (i = 0; i < HR_LMS_CASCADE_HF; i++) {
@@ -124,7 +125,8 @@ void HR_Init(const HR_Config_t *config, HR_State_t *state)
  * RunSolver 消费数据后重置索引, PushSample 不主动重置.
  */
 void HR_PushSample(HR_State_t *state,
-                   float ppg, float accx, float accy, float accz, float hf)
+                   float ppg, float accx, float accy, float accz,
+                   float hf1, float hf2)
 {
     /* 溢出保护: 缓冲区已满但未被消费, 丢弃新采样 */
     if (state->sample_idx >= HR_STEP_SAMPLES) {
@@ -136,7 +138,8 @@ void HR_PushSample(HR_State_t *state,
     state->buf_1s_accx[state->sample_idx] = accx;
     state->buf_1s_accy[state->sample_idx] = accy;
     state->buf_1s_accz[state->sample_idx] = accz;
-    state->buf_1s_hf[state->sample_idx]   = hf;
+    state->buf_1s_hf[state->sample_idx]   = hf1;
+    state->buf_1s_hf2[state->sample_idx]  = hf2;
 
     state->sample_idx++;
 
@@ -204,12 +207,20 @@ float HR_RunSolver(HR_State_t *state)
            state->buf_1s_accz,
            HR_STEP_SAMPLES * sizeof(float));
 
-    /* HF */
+    /* HF1 (桥顶1) */
     memmove(state->win_hf,
             state->win_hf + HR_STEP_SAMPLES,
             (HR_WIN_SAMPLES - HR_STEP_SAMPLES) * sizeof(float));
     memcpy(state->win_hf + (HR_WIN_SAMPLES - HR_STEP_SAMPLES),
            state->buf_1s_hf,
+           HR_STEP_SAMPLES * sizeof(float));
+
+    /* HF2 (桥顶2) */
+    memmove(state->win_hf2,
+            state->win_hf2 + HR_STEP_SAMPLES,
+            (HR_WIN_SAMPLES - HR_STEP_SAMPLES) * sizeof(float));
+    memcpy(state->win_hf2 + (HR_WIN_SAMPLES - HR_STEP_SAMPLES),
+           state->buf_1s_hf2,
            HR_STEP_SAMPLES * sizeof(float));
 
     /* ======================================================
@@ -238,6 +249,11 @@ float HR_RunSolver(HR_State_t *state)
     arm_biquad_cascade_df1_f32(&state->biquad_hf,
                                state->buf_1s_hf,
                                state->iir_filt_1s_hf,
+                               HR_STEP_SAMPLES);
+
+    arm_biquad_cascade_df1_f32(&state->biquad_hf2,
+                               state->buf_1s_hf2,
+                               state->iir_filt_1s_hf2,
                                HR_STEP_SAMPLES);
 
     /* ======================================================
@@ -276,6 +292,13 @@ float HR_RunSolver(HR_State_t *state)
             (HR_WIN_SAMPLES - HR_STEP_SAMPLES) * sizeof(float));
     memcpy(state->filt_hf + (HR_WIN_SAMPLES - HR_STEP_SAMPLES),
            state->iir_filt_1s_hf,
+           HR_STEP_SAMPLES * sizeof(float));
+
+    memmove(state->filt_hf2,
+            state->filt_hf2 + HR_STEP_SAMPLES,
+            (HR_WIN_SAMPLES - HR_STEP_SAMPLES) * sizeof(float));
+    memcpy(state->filt_hf2 + (HR_WIN_SAMPLES - HR_STEP_SAMPLES),
+           state->iir_filt_1s_hf2,
            HR_STEP_SAMPLES * sizeof(float));
 
     /* ======================================================
@@ -335,10 +358,11 @@ float HR_RunSolver(HR_State_t *state)
     /* ======================================================
      * Step 5b: HF 信号质量 - AC 幅值 (BPF 后标准差)
      * ======================================================
-     * 计算 HF 桥顶信号的交流幅值, 反映传感器噪声底噪 (静息) 或信号活跃度 (运动).
-     * 值为 LSB 单位, 由 main.c 转换为 mV 打包.
+     * 计算双路 HF 桥顶信号的交流幅值, 反映传感器噪声底噪或信号活跃度.
+     * 必须在 Step 8 就地 zscore 之前完成.
      */
-    arm_std_f32(state->filt_hf, HR_WIN_SAMPLES, &state->hf_signal_std);
+    arm_std_f32(state->filt_hf, HR_WIN_SAMPLES, &state->hf1_signal_std);
+    arm_std_f32(state->filt_hf2, HR_WIN_SAMPLES, &state->hf2_signal_std);
 
     /* ======================================================
      * Step 6: 窗口填充检查
@@ -352,19 +376,30 @@ float HR_RunSolver(HR_State_t *state)
     state->win_filled = 1;
 
     /* ======================================================
-     * Step 7: 时延对齐
+     * Step 7: 时延对齐 + 相关性排序
      * ======================================================
-     * 对每个参考通道计算与 PPG 的最优时延, 确定最高相关度通道.
-     * 根据时延计算 LMS 滤波器阶数.
+     * 对 5 个参考通道 (HF1, HF2, ACCx, ACCy, ACCz) 计算与 PPG 的时延和相关度.
+     * HF 通道按相关性排序选择级联顺序; ACC 三轴按相关性排序选择级联顺序.
+     * 根据最优通道的时延计算 LMS 滤波器阶数.
      */
     {
-        float corr_accx, corr_accy, corr_accz, corr_hf;
-        int16_t delay_accx, delay_accy, delay_accz, delay_hf;
-        float max_corr_acc;
-        int16_t best_delay_acc;
-        uint8_t best_acc_idx;  /* 0=x, 1=y, 2=z */
+        float corr_accx, corr_accy, corr_accz;
+        float corr_hf1, corr_hf2;
+        int16_t delay_accx, delay_accy, delay_accz;
+        int16_t delay_hf1, delay_hf2;
         uint16_t order_hf, order_acc;
 
+        /* 排序用结构: 参考信号指针 + 相关性绝对值 + 时延 */
+        typedef struct { float *ref; float abs_corr; int16_t delay; } ref_rank_t;
+        ref_rank_t hf_rank[2], acc_rank[3];
+        uint8_t i;
+
+        /* HF1 (桥顶1) 时延搜索 */
+        delay_hf1 = DSP_FindDelay(state->filt_ppg, state->filt_hf,
+                                  HR_WIN_SAMPLES, state->scratch_a, &corr_hf1);
+        /* HF2 (桥顶2) 时延搜索 */
+        delay_hf2 = DSP_FindDelay(state->filt_ppg, state->filt_hf2,
+                                  HR_WIN_SAMPLES, state->scratch_a, &corr_hf2);
         /* ACC X 时延搜索 */
         delay_accx = DSP_FindDelay(state->filt_ppg, state->filt_accx,
                                    HR_WIN_SAMPLES, state->scratch_a, &corr_accx);
@@ -374,44 +409,57 @@ float HR_RunSolver(HR_State_t *state)
         /* ACC Z 时延搜索 */
         delay_accz = DSP_FindDelay(state->filt_ppg, state->filt_accz,
                                    HR_WIN_SAMPLES, state->scratch_a, &corr_accz);
-        /* HF 时延搜索 */
-        delay_hf = DSP_FindDelay(state->filt_ppg, state->filt_hf,
-                                 HR_WIN_SAMPLES, state->scratch_a, &corr_hf);
 
-        /* 选择 ACC 三轴中相关度最高的通道 */
-        max_corr_acc = corr_accx;
-        best_delay_acc = delay_accx;
-        best_acc_idx = 0;
-        if (corr_accy > max_corr_acc) {
-            max_corr_acc = corr_accy;
-            best_delay_acc = delay_accy;
-            best_acc_idx = 1;
-        }
-        if (corr_accz > max_corr_acc) {
-            max_corr_acc = corr_accz;
-            best_delay_acc = delay_accz;
-            best_acc_idx = 2;
+        /* --- HF 按相关性排序 (降序, 用于 2 级级联) --- */
+        hf_rank[0].ref = state->filt_hf;   hf_rank[0].abs_corr = fabsf(corr_hf1); hf_rank[0].delay = delay_hf1;
+        hf_rank[1].ref = state->filt_hf2;  hf_rank[1].abs_corr = fabsf(corr_hf2); hf_rank[1].delay = delay_hf2;
+        if (hf_rank[0].abs_corr < hf_rank[1].abs_corr) {
+            ref_rank_t tmp = hf_rank[0];
+            hf_rank[0] = hf_rank[1];
+            hf_rank[1] = tmp;
         }
 
-        /* 根据 HF 时延计算 LMS 阶数 */
-        if (delay_hf < 0) {
-            order_hf = (uint16_t)(-delay_hf * 1.0f);
-            if (order_hf < 1) order_hf = 1;
-            if (order_hf > HR_MAX_ORDER) order_hf = HR_MAX_ORDER;
-        } else {
-            order_hf = HR_MAX_ORDER;
+        /* --- ACC 三轴按相关性排序 (降序, 用于 3 级级联) --- */
+        acc_rank[0].ref = state->filt_accx; acc_rank[0].abs_corr = fabsf(corr_accx); acc_rank[0].delay = delay_accx;
+        acc_rank[1].ref = state->filt_accy; acc_rank[1].abs_corr = fabsf(corr_accy); acc_rank[1].delay = delay_accy;
+        acc_rank[2].ref = state->filt_accz; acc_rank[2].abs_corr = fabsf(corr_accz); acc_rank[2].delay = delay_accz;
+        /* 插入排序 (3 个元素) */
+        for (i = 1; i < 3; i++) {
+            ref_rank_t key = acc_rank[i];
+            int8_t j = (int8_t)i - 1;
+            while (j >= 0 && acc_rank[j].abs_corr < key.abs_corr) {
+                acc_rank[j + 1] = acc_rank[j];
+                j--;
+            }
+            acc_rank[j + 1] = key;
         }
 
-        /* 根据 ACC 时延计算 LMS 阶数 (ACC 路径使用 1.5 倍因子) */
-        if (best_delay_acc < 0) {
-            order_acc = (uint16_t)(-best_delay_acc * 1.5f);
-            if (order_acc < 1) order_acc = 1;
-            if (order_acc > HR_MAX_ORDER) order_acc = HR_MAX_ORDER;
-        } else {
-            order_acc = HR_MAX_ORDER;
+        /* --- LMS 阶数计算 --- */
+        /* HF: 使用相关性最高的通道的时延 */
+        {
+            int16_t best_delay_hf = hf_rank[0].delay;
+            if (best_delay_hf < 0) {
+                order_hf = (uint16_t)(-best_delay_hf * 1.0f);
+                if (order_hf < 1) order_hf = 1;
+                if (order_hf > HR_MAX_ORDER) order_hf = HR_MAX_ORDER;
+            } else {
+                order_hf = HR_MAX_ORDER;
+            }
         }
 
-        /* 条件性 LMS 初始化: 仅在首次运行或阶数变化时重置, 保留系数以维持收敛 */
+        /* ACC: 使用相关性最高的轴的时延 (1.5 倍因子) */
+        {
+            int16_t best_delay_acc = acc_rank[0].delay;
+            if (best_delay_acc < 0) {
+                order_acc = (uint16_t)(-best_delay_acc * 1.5f);
+                if (order_acc < 1) order_acc = 1;
+                if (order_acc > HR_MAX_ORDER) order_acc = HR_MAX_ORDER;
+            } else {
+                order_acc = HR_MAX_ORDER;
+            }
+        }
+
+        /* 条件性 LMS 初始化: 仅在首次运行或阶数变化时重置 */
         {
             uint8_t need_reinit_hf = (state->win_count == HR_WIN_SEC) ||
                                      (order_hf != state->prev_order_hf);
@@ -419,7 +467,7 @@ float HR_RunSolver(HR_State_t *state)
                                       (order_acc != state->prev_order_acc);
 
             if (need_reinit_hf) {
-                for (uint8_t i = 0; i < HR_LMS_CASCADE_HF; i++) {
+                for (i = 0; i < HR_LMS_CASCADE_HF; i++) {
                     LMS_Init(&state->lms_hf[i],
                              state->lms_hf_coeffs[i],
                              state->lms_hf_state[i],
@@ -431,7 +479,7 @@ float HR_RunSolver(HR_State_t *state)
             }
 
             if (need_reinit_acc) {
-                for (uint8_t i = 0; i < HR_LMS_CASCADE_ACC; i++) {
+                for (i = 0; i < HR_LMS_CASCADE_ACC; i++) {
                     LMS_Init(&state->lms_acc[i],
                              state->lms_acc_coeffs[i],
                              state->lms_acc_state[i],
@@ -444,101 +492,104 @@ float HR_RunSolver(HR_State_t *state)
         }
 
         /* ======================================================
-         * Step 7b: 相关性归一化 (信号质量评估)
-         * ======================================================
-         * 将 DSP_FindDelay 返回的原始点积归一化为 Pearson 相关系数.
-         * pearson = dot / (N * std_x * std_y)
-         */
+         * Step 7b: Pearson 相关系数归一化 (信号质量评估)
+         * ====================================================== */
         {
-            float ppg_std;
-            float norm_hf, norm_acc;
-            float best_acc_std;
+            float ppg_std, ref_std;
 
             arm_std_f32(state->filt_ppg, HR_WIN_SAMPLES, &ppg_std);
 
-            /* HF-PPG Pearson 相关系数 */
-            norm_hf = (float)HR_WIN_SAMPLES * ppg_std * state->hf_signal_std;
-            state->hf_ppg_corr = (norm_hf > 1e-6f) ? (corr_hf / norm_hf) : 0.0f;
+            /* HF1-PPG */
+            ref_std = state->hf1_signal_std;
+            { float norm = (float)HR_WIN_SAMPLES * ppg_std * ref_std;
+              state->hf1_ppg_corr = (norm > 1e-6f) ? (corr_hf1 / norm) : 0.0f; }
 
-            /* ACC-PPG Pearson 相关系数 (使用最优 ACC 轴) */
-            if (best_acc_idx == 0)
-                arm_std_f32(state->filt_accx, HR_WIN_SAMPLES, &best_acc_std);
-            else if (best_acc_idx == 1)
-                arm_std_f32(state->filt_accy, HR_WIN_SAMPLES, &best_acc_std);
-            else
-                arm_std_f32(state->filt_accz, HR_WIN_SAMPLES, &best_acc_std);
+            /* HF2-PPG */
+            ref_std = state->hf2_signal_std;
+            { float norm = (float)HR_WIN_SAMPLES * ppg_std * ref_std;
+              state->hf2_ppg_corr = (norm > 1e-6f) ? (corr_hf2 / norm) : 0.0f; }
 
-            norm_acc = (float)HR_WIN_SAMPLES * ppg_std * best_acc_std;
-            state->acc_ppg_corr = (norm_acc > 1e-6f) ? (max_corr_acc / norm_acc) : 0.0f;
+            /* ACC-PPG (最优轴) */
+            arm_std_f32(acc_rank[0].ref, HR_WIN_SAMPLES, &ref_std);
+            { float norm = (float)HR_WIN_SAMPLES * ppg_std * ref_std;
+              float best_corr = (acc_rank[0].ref == state->filt_accx) ? corr_accx :
+                                (acc_rank[0].ref == state->filt_accy) ? corr_accy : corr_accz;
+              state->acc_ppg_corr = (norm > 1e-6f) ? (best_corr / norm) : 0.0f; }
         }
 
         /* ======================================================
-         * Step 8: Path A - LMS-HF 路径
+         * Step 8: Path A - LMS-HF 路径 (双路桥顶, 相关性排序级联)
          * ======================================================
-         * 使用 HF 参考信号通过 LMS 自适应滤波从 PPG 中消除高频噪声.
-         * 对 LMS 误差输出做 FFT 峰值检测, 结合频谱惩罚和心率追踪.
+         * HF1(桥顶1) 和 HF2(桥顶2) 按相关性排序后逐级级联 LMS.
+         * 每级使用动态步长: mu = max(0.001, Mu_Base - |corr|/100).
+         * 参考信号就地 zscore (filt_hf/filt_hf2 在此之后不再需要原始值).
          */
         {
-            float *hf_refs[HR_LMS_CASCADE_HF];
             float motion_freq_hf;
             uint16_t num_peaks_hf;
 
-            /* 将 PPG 拷贝到 scratch_a 并 zscore 归一化 */
+            /* 就地 zscore 双路 HF 参考信号 */
+            zscore_inplace(state->filt_hf, HR_WIN_SAMPLES);
+            zscore_inplace(state->filt_hf2, HR_WIN_SAMPLES);
+
+            /* PPG 拷贝到 scratch_a 并 zscore (必须拷贝, filt_ppg 留给 FFT) */
             memcpy(state->scratch_a, state->filt_ppg, HR_WIN_SAMPLES * sizeof(float));
             zscore_inplace(state->scratch_a, HR_WIN_SAMPLES);
 
-            /* 将 HF 信号拷贝到 scratch_b 并 zscore 归一化 */
-            memcpy(state->scratch_b, state->filt_hf, HR_WIN_SAMPLES * sizeof(float));
-            zscore_inplace(state->scratch_b, HR_WIN_SAMPLES);
+            /* 逐级 LMS: 每级使用排序后的 HF 参考和动态步长 */
+            for (i = 0; i < HR_LMS_CASCADE_HF; i++) {
+                float mu_stage = s_config.LMS_Mu_Base - hf_rank[i].abs_corr / 100.0f;
+                if (mu_stage < 0.001f) mu_stage = 0.001f;
+                state->lms_hf[i].mu = mu_stage;
 
-            /* 设置 HF 参考通道指针 (两个级联均使用同一个 HF 信号) */
-            hf_refs[0] = state->scratch_b;
-            hf_refs[1] = state->scratch_b;
+                if (i == 0) {
+                    /* 第 0 级: desired=PPG_zscore, ref=HF_sorted[0] */
+                    LMS_Process(&state->lms_hf[0],
+                                hf_rank[0].ref, state->scratch_a,
+                                state->lms_hf_err, state->lms_hf_tmp,
+                                HR_WIN_SAMPLES);
+                } else {
+                    /* 后续级: desired=上一级误差输出, ref=HF_sorted[i] */
+                    memcpy(state->scratch_a, state->lms_hf_err,
+                           HR_WIN_SAMPLES * sizeof(float));
+                    LMS_Process(&state->lms_hf[i],
+                                hf_rank[i].ref, state->scratch_a,
+                                state->lms_hf_err,
+                                (i & 1U) ? state->lms_hf_tmp2 : state->lms_hf_tmp,
+                                HR_WIN_SAMPLES);
+                }
+            }
 
-            /* 级联 LMS 处理: ref=HF噪声, desired=PPG, err=去噪后PPG */
-            LMS_CascadeProcess(state->lms_hf,
-                               HR_LMS_CASCADE_HF,
-                               hf_refs,
-                               state->scratch_a,
-                               state->lms_hf_err,
-                               state->lms_hf_tmp,
-                               state->lms_hf_tmp2,
-                               HR_WIN_SAMPLES);
-
-            /* 先从参考信号 FFT 获取运动主频 (先做参考 FFT, 避免覆盖主信号峰值) */
+            /* 从最优 HF 参考信号 FFT 获取运动主频 */
             motion_freq_hf = 0.0f;
             if (s_config.Spec_Penalty_Enable) {
                 uint16_t num_ref_peaks;
-                DSP_FFTPeaks(state->scratch_b, HR_WIN_SAMPLES,
+                DSP_FFTPeaks(hf_rank[0].ref, HR_WIN_SAMPLES,
                              state->fft_input, state->fft_output,
                              (float)HR_FS, 0.3f,
                              state->peak_freqs, state->peak_amps,
                              HR_MAX_PEAKS, &num_ref_peaks);
                 if (num_ref_peaks > 0) {
-                    motion_freq_hf = state->peak_freqs[0]; /* 最强峰 = 运动频率 */
+                    motion_freq_hf = state->peak_freqs[0];
                 }
             }
 
-            /* 对 LMS-HF 误差输出做 FFT 峰值检测 (此时 peak_freqs/peak_amps 专用于主信号) */
+            /* 对 LMS-HF 误差输出做 FFT 峰值检测 */
             DSP_FFTPeaks(state->lms_hf_err, HR_WIN_SAMPLES,
                          state->fft_input, state->fft_output,
                          (float)HR_FS, 0.3f,
                          state->peak_freqs, state->peak_amps,
                          HR_MAX_PEAKS, &num_peaks_hf);
 
-            /* 频谱惩罚: 对运动频率及二次谐波附近峰值施加惩罚 */
             if (motion_freq_hf > 0.0f && num_peaks_hf > 0) {
                 DSP_SpectrumPenalty(state->peak_freqs, state->peak_amps,
-                                   num_peaks_hf,
-                                   motion_freq_hf,
+                                   num_peaks_hf, motion_freq_hf,
                                    s_config.Spec_Penalty_Width,
                                    s_config.Spec_Penalty_Weight);
             }
 
-            /* 按幅值降序排列峰值 */
             DSP_SortPeaksByAmp(state->peak_freqs, state->peak_amps, num_peaks_hf);
 
-            /* 心率追踪: 在候选峰中选择最接近历史心率的峰值 */
             state->hr_lms_hf = DSP_TrackHR(state->peak_freqs, num_peaks_hf,
                                             state->hr_lms_hf,
                                             s_config.HR_Range_Hz,
@@ -546,82 +597,75 @@ float HR_RunSolver(HR_State_t *state)
         }
 
         /* ======================================================
-         * Step 9: Path B - LMS-ACC 路径
+         * Step 9: Path B - LMS-ACC 路径 (三轴排序级联)
          * ======================================================
-         * 使用最优 ACC 轴作为参考, 通过 LMS 自适应滤波消除运动伪影.
+         * ACC 三轴按相关性排序后逐级级联 LMS, 每级使用不同轴作为参考.
+         * 就地 zscore filt_accx/y/z (后续仅 Step 10 FFT 需读 filt_accz, 不影响).
          */
         {
-            float *acc_refs[HR_LMS_CASCADE_ACC];
-            float *best_acc_filt;
             float motion_freq_acc;
             uint16_t num_peaks_acc;
 
-            /* 选择相关度最高的 ACC 通道 */
-            if (best_acc_idx == 0) {
-                best_acc_filt = state->filt_accx;
-            } else if (best_acc_idx == 1) {
-                best_acc_filt = state->filt_accy;
-            } else {
-                best_acc_filt = state->filt_accz;
-            }
+            /* 就地 zscore 三轴 ACC 参考信号 */
+            zscore_inplace(state->filt_accx, HR_WIN_SAMPLES);
+            zscore_inplace(state->filt_accy, HR_WIN_SAMPLES);
+            zscore_inplace(state->filt_accz, HR_WIN_SAMPLES);
 
-            /* 将 PPG 拷贝到 scratch_a 并 zscore 归一化 */
+            /* PPG 重新拷贝到 scratch_a 并 zscore */
             memcpy(state->scratch_a, state->filt_ppg, HR_WIN_SAMPLES * sizeof(float));
             zscore_inplace(state->scratch_a, HR_WIN_SAMPLES);
 
-            /* 将最优 ACC 通道拷贝到 scratch_b 并 zscore 归一化 */
-            memcpy(state->scratch_b, best_acc_filt, HR_WIN_SAMPLES * sizeof(float));
-            zscore_inplace(state->scratch_b, HR_WIN_SAMPLES);
+            /* 逐级 LMS: 每级使用排序后的 ACC 轴和动态步长 */
+            for (i = 0; i < HR_LMS_CASCADE_ACC; i++) {
+                float mu_stage = s_config.LMS_Mu_Base - acc_rank[i].abs_corr / 100.0f;
+                if (mu_stage < 0.001f) mu_stage = 0.001f;
+                state->lms_acc[i].mu = mu_stage;
 
-            /* 设置 ACC 参考通道指针 (三个级联均使用同一信号) */
-            acc_refs[0] = state->scratch_b;
-            acc_refs[1] = state->scratch_b;
-            acc_refs[2] = state->scratch_b;
+                if (i == 0) {
+                    LMS_Process(&state->lms_acc[0],
+                                acc_rank[0].ref, state->scratch_a,
+                                state->lms_acc_err, state->lms_acc_tmp,
+                                HR_WIN_SAMPLES);
+                } else {
+                    memcpy(state->scratch_a, state->lms_acc_err,
+                           HR_WIN_SAMPLES * sizeof(float));
+                    LMS_Process(&state->lms_acc[i],
+                                acc_rank[i].ref, state->scratch_a,
+                                state->lms_acc_err,
+                                (i & 1U) ? state->lms_acc_tmp2 : state->lms_acc_tmp,
+                                HR_WIN_SAMPLES);
+                }
+            }
 
-            /* 级联 LMS 处理: ref=ACC噪声, desired=PPG, err=去噪后PPG */
-            LMS_CascadeProcess(state->lms_acc,
-                               HR_LMS_CASCADE_ACC,
-                               acc_refs,
-                               state->scratch_a,
-                               state->lms_acc_err,
-                               state->lms_acc_tmp,
-                               state->lms_acc_tmp2,
-                               HR_WIN_SAMPLES);
-
-            /* 先从参考信号 FFT 获取运动主频 (先做参考 FFT, 避免覆盖主信号峰值) */
+            /* 从 ACC-Z (或最优轴) FFT 获取运动主频 */
             motion_freq_acc = 0.0f;
             if (s_config.Spec_Penalty_Enable) {
                 uint16_t num_ref_peaks;
-                DSP_FFTPeaks(state->scratch_b, HR_WIN_SAMPLES,
+                DSP_FFTPeaks(acc_rank[0].ref, HR_WIN_SAMPLES,
                              state->fft_input, state->fft_output,
                              (float)HR_FS, 0.3f,
                              state->peak_freqs, state->peak_amps,
                              HR_MAX_PEAKS, &num_ref_peaks);
                 if (num_ref_peaks > 0) {
-                    motion_freq_acc = state->peak_freqs[0]; /* 最强峰 = 运动频率 */
+                    motion_freq_acc = state->peak_freqs[0];
                 }
             }
 
-            /* 对 LMS-ACC 误差输出做 FFT 峰值检测 (此时 peak_freqs/peak_amps 专用于主信号) */
             DSP_FFTPeaks(state->lms_acc_err, HR_WIN_SAMPLES,
                          state->fft_input, state->fft_output,
                          (float)HR_FS, 0.3f,
                          state->peak_freqs, state->peak_amps,
                          HR_MAX_PEAKS, &num_peaks_acc);
 
-            /* 频谱惩罚: 对运动频率及二次谐波附近峰值施加惩罚 */
             if (motion_freq_acc > 0.0f && num_peaks_acc > 0) {
                 DSP_SpectrumPenalty(state->peak_freqs, state->peak_amps,
-                                   num_peaks_acc,
-                                   motion_freq_acc,
+                                   num_peaks_acc, motion_freq_acc,
                                    s_config.Spec_Penalty_Width,
                                    s_config.Spec_Penalty_Weight);
             }
 
-            /* 按幅值降序排列峰值 */
             DSP_SortPeaksByAmp(state->peak_freqs, state->peak_amps, num_peaks_acc);
 
-            /* 心率追踪 */
             state->hr_lms_acc = DSP_TrackHR(state->peak_freqs, num_peaks_acc,
                                              state->hr_lms_acc,
                                              s_config.HR_Range_Hz,
@@ -634,6 +678,7 @@ float HR_RunSolver(HR_State_t *state)
      * ======================================================
      * 直接对滤波后 PPG 信号做 FFT, 不经过 LMS 去噪.
      * 适用于静息状态, 信号质量较好的场景.
+     * 注: filt_accz 已被 Step 9 就地 zscore, 但频率信息完整, 不影响频谱惩罚.
      */
     {
         float mean_val;
@@ -650,10 +695,7 @@ float HR_RunSolver(HR_State_t *state)
         /* 应用 Hamming 窗 */
         arm_mult_f32(state->scratch_a, state->hamming_win, state->scratch_a, HR_WIN_SAMPLES);
 
-        /* 注意: DSP_FFTPeaks 内部会 memset(fft_input, 0) 再 memcpy(signal -> fft_input),
-         * 因此 signal 不能指向 fft_input 自身, 必须使用独立缓冲区 (scratch_a). */
-
-        /* 先从参考信号 FFT 获取运动主频 (使用 ACC Z 轴作为参考) */
+        /* 先从参考信号 FFT 获取运动主频 (使用 ACC Z 轴, 已 zscore 但频率信息完整) */
         motion_freq_fft = 0.0f;
         if (s_config.Spec_Penalty_Enable) {
             uint16_t num_ref_peaks;
@@ -663,30 +705,26 @@ float HR_RunSolver(HR_State_t *state)
                          state->peak_freqs, state->peak_amps,
                          HR_MAX_PEAKS, &num_ref_peaks);
             if (num_ref_peaks > 0) {
-                motion_freq_fft = state->peak_freqs[0]; /* 最强峰 = 运动频率 */
+                motion_freq_fft = state->peak_freqs[0];
             }
         }
 
-        /* 对 PPG 信号做 FFT 峰值检测 (此时 peak_freqs/peak_amps 专用于主信号) */
+        /* 对 PPG 信号做 FFT 峰值检测 */
         DSP_FFTPeaks(state->scratch_a, HR_WIN_SAMPLES,
                      state->fft_input, state->fft_output,
                      (float)HR_FS, 0.3f,
                      state->peak_freqs, state->peak_amps,
                      HR_MAX_PEAKS, &num_peaks_fft);
 
-        /* 频谱惩罚: 对运动频率及二次谐波附近峰值施加惩罚 */
         if (motion_freq_fft > 0.0f && num_peaks_fft > 0) {
             DSP_SpectrumPenalty(state->peak_freqs, state->peak_amps,
-                               num_peaks_fft,
-                               motion_freq_fft,
+                               num_peaks_fft, motion_freq_fft,
                                s_config.Spec_Penalty_Width,
                                s_config.Spec_Penalty_Weight);
         }
 
-        /* 按幅值降序排列 */
         DSP_SortPeaksByAmp(state->peak_freqs, state->peak_amps, num_peaks_fft);
 
-        /* 心率追踪 */
         state->hr_fft = DSP_TrackHR(state->peak_freqs, num_peaks_fft,
                                      state->hr_fft,
                                      s_config.HR_Range_Rest_Hz,
