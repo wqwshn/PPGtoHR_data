@@ -43,6 +43,9 @@ extern "C" {
 /* ACC 灵敏度 (LSM9DS1 @ ±4g 量程) */
 #define HR_ACC_LSB_PER_G    8192.0f /* 16-bit ADC, ±4g: 32768/4 = 8192 LSB/g */
 
+/* HF/ADS124S06 ADC 电压转换 (24-bit ADC, 仅取高 16 位, VREF=2.5V, Gain=1) */
+#define HR_HF_LSB_TO_MV     (2.5f * 1000.0f / 32768.0f) /* 0.076294 mV/LSB */
+
 /* ============================================================
  * 算法参数结构体 (运行时可调)
  * ============================================================ */
@@ -167,6 +170,11 @@ typedef struct {
     /* --- LMS 收敛性保护 --- */
     uint16_t prev_order_hf;         /* 上一次 HF 路径 LMS 阶数 */
     uint16_t prev_order_acc;        /* 上一次 ACC 路径 LMS 阶数 */
+
+    /* --- 信号质量评估 (调试用) --- */
+    float   hf_signal_std;          /* HF 信号 AC 幅值 (BPF 后标准差, LSB) */
+    float   hf_ppg_corr;            /* HF-PPG Pearson 相关系数 (-1~+1) */
+    float   acc_ppg_corr;           /* ACC-PPG Pearson 相关系数 (-1~+1, 最优轴) */
 } HR_State_t;
 
 /* ============================================================

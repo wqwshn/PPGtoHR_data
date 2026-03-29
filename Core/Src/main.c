@@ -279,8 +279,8 @@ int main(void)
     if (algorithm_initialized && hr_state.flag_1s_ready) {
         float bpm = HR_RunSolver(&hr_state);
         if (bpm > 0) {
-            /* 构建心率结果数据包 (21 字节) */
-            uint8_t hr_packet[21];
+            /* 构建心率结果数据包 (27 字节) */
+            uint8_t hr_packet[27];
             hr_packet[0] = 0xAA;       /* 帧头 */
             hr_packet[1] = 0xCC;
 
@@ -310,7 +310,7 @@ int main(void)
             hr_packet[10] = (fft_x10 >> 8) & 0xFF;
             hr_packet[11] = fft_x10 & 0xFF;
 
-            /* PPG 信号均值 (窗口第一个通道的平均值, 用于信号强度) */
+            /* PPG 信号均值 */
             float ppg_mean = 0;
             for (int i = 0; i < HR_STEP_SAMPLES; i++) ppg_mean += hr_state.buf_1s_ppg[i];
             ppg_mean /= HR_STEP_SAMPLES;
@@ -333,15 +333,31 @@ int main(void)
             /* 采样率 (Hz) - 固定 125 */
             hr_packet[18] = HR_FS;
 
-            /* XOR 校验 (覆盖 bytes[2..18]) */
+            /* HF AC 幅值 (x100 mV, LSB std -> mV) */
+            float hf_mv = hr_state.hf_signal_std * HR_HF_LSB_TO_MV;
+            uint16_t hf_mv_x100 = (uint16_t)(hf_mv * 100.0f + 0.5f);
+            hr_packet[19] = (hf_mv_x100 >> 8) & 0xFF;
+            hr_packet[20] = hf_mv_x100 & 0xFF;
+
+            /* HF-PPG 相关系数 (x10000, signed) */
+            int16_t hf_corr_x10000 = (int16_t)(hr_state.hf_ppg_corr * 10000.0f);
+            hr_packet[21] = (uint8_t)((hf_corr_x10000 >> 8) & 0xFF);
+            hr_packet[22] = (uint8_t)(hf_corr_x10000 & 0xFF);
+
+            /* ACC-PPG 相关系数 (x10000, signed) */
+            int16_t acc_corr_x10000 = (int16_t)(hr_state.acc_ppg_corr * 10000.0f);
+            hr_packet[23] = (uint8_t)((acc_corr_x10000 >> 8) & 0xFF);
+            hr_packet[24] = (uint8_t)(acc_corr_x10000 & 0xFF);
+
+            /* XOR 校验 (覆盖 bytes[2..24]) */
             uint8_t xor_val = 0;
-            for (int i = 2; i < 19; i++) xor_val ^= hr_packet[i];
-            hr_packet[19] = xor_val;
+            for (int i = 2; i < 25; i++) xor_val ^= hr_packet[i];
+            hr_packet[25] = xor_val;
 
             /* 帧尾 */
-            hr_packet[20] = 0xCC;
+            hr_packet[26] = 0xCC;
 
-            HAL_UART_Transmit_DMA(&huart2, hr_packet, 21);
+            HAL_UART_Transmit_DMA(&huart2, hr_packet, 27);
         }
     }
 #endif /* !ENABLE_RAW_DATA_PACKET */

@@ -333,6 +333,14 @@ float HR_RunSolver(HR_State_t *state)
     }
 
     /* ======================================================
+     * Step 5b: HF 信号质量 - AC 幅值 (BPF 后标准差)
+     * ======================================================
+     * 计算 HF 桥顶信号的交流幅值, 反映传感器噪声底噪 (静息) 或信号活跃度 (运动).
+     * 值为 LSB 单位, 由 main.c 转换为 mV 打包.
+     */
+    arm_std_f32(state->filt_hf, HR_WIN_SAMPLES, &state->hf_signal_std);
+
+    /* ======================================================
      * Step 6: 窗口填充检查
      * ======================================================
      * 需要至少 8 个 1 秒步长 (8 秒窗口) 才能开始计算.
@@ -433,6 +441,35 @@ float HR_RunSolver(HR_State_t *state)
                 }
                 state->prev_order_acc = order_acc;
             }
+        }
+
+        /* ======================================================
+         * Step 7b: 相关性归一化 (信号质量评估)
+         * ======================================================
+         * 将 DSP_FindDelay 返回的原始点积归一化为 Pearson 相关系数.
+         * pearson = dot / (N * std_x * std_y)
+         */
+        {
+            float ppg_std;
+            float norm_hf, norm_acc;
+            float best_acc_std;
+
+            arm_std_f32(state->filt_ppg, HR_WIN_SAMPLES, &ppg_std);
+
+            /* HF-PPG Pearson 相关系数 */
+            norm_hf = (float)HR_WIN_SAMPLES * ppg_std * state->hf_signal_std;
+            state->hf_ppg_corr = (norm_hf > 1e-6f) ? (corr_hf / norm_hf) : 0.0f;
+
+            /* ACC-PPG Pearson 相关系数 (使用最优 ACC 轴) */
+            if (best_acc_idx == 0)
+                arm_std_f32(state->filt_accx, HR_WIN_SAMPLES, &best_acc_std);
+            else if (best_acc_idx == 1)
+                arm_std_f32(state->filt_accy, HR_WIN_SAMPLES, &best_acc_std);
+            else
+                arm_std_f32(state->filt_accz, HR_WIN_SAMPLES, &best_acc_std);
+
+            norm_acc = (float)HR_WIN_SAMPLES * ppg_std * best_acc_std;
+            state->acc_ppg_corr = (norm_acc > 1e-6f) ? (max_corr_acc / norm_acc) : 0.0f;
         }
 
         /* ======================================================
