@@ -4,21 +4,21 @@ extern uint8_t DIN[4];
 extern uint8_t DOUT[4];
 extern uint8_t ADC_1to4Voltage_flag;
 
-// 读取adc寄存器的值
-void ADC_RREG(uint8_t Address_Reg, uint8_t *rxData){          //  读取ADC寄存器值 1byte 地址|0x20 2byte 0（字节数-1） 3byte 0
+// 读取adc寄存器的值 (阻塞式, 仅3字节, 避免DMA栈缓冲区生命周期问题)
+void ADC_RREG(uint8_t Address_Reg, uint8_t *rxData){
 	uint8_t spiTxData[3] = {0};
-	spiTxData[0] = 0x20 | Address_Reg; 
-	HAL_SPI_TransmitReceive_DMA(&hspi1, spiTxData, rxData, 3); 
+	spiTxData[0] = 0x20 | Address_Reg;
+	HAL_SPI_TransmitReceive(&hspi1, spiTxData, rxData, 3, 0xffff);
 }
 
 
-// 写入adc寄存器的值
-void ADC_WREG(uint8_t Address_Reg, uint8_t txData){          //  写入ADC寄存器值 1byte 地址|0x40 2byte 0（字节数-1） 3byte 要写入的数据
+// 写入adc寄存器的值 (阻塞式)
+void ADC_WREG(uint8_t Address_Reg, uint8_t txData){
 	uint8_t spiTxData[3] = {0};
-	spiTxData[0] = 0x40 | Address_Reg; 
-	spiTxData[2] = txData; 
+	spiTxData[0] = 0x40 | Address_Reg;
+	spiTxData[2] = txData;
 	uint8_t spiRxData[3] = {0};
-	HAL_SPI_TransmitReceive_DMA(&hspi1, spiTxData, spiRxData, 3); 
+	HAL_SPI_TransmitReceive(&hspi1, spiTxData, spiRxData, 3, 0xffff);
 }
 
 
@@ -74,20 +74,24 @@ void ADC_Init(void){
 	HAL_GPIO_WritePin(GPIOA, SPI1_NSS_Pin, GPIO_PIN_RESET);
 	HAL_Delay(1);
 	
-	//上电之后reset一下
+	// 上电之后reset一下
 	HAL_GPIO_WritePin(GPIOA, AD_RESET_Pin, GPIO_PIN_RESET);
 	HAL_Delay(1);
 	HAL_GPIO_WritePin(GPIOA, AD_RESET_Pin, GPIO_PIN_SET);
-	
-	//检查STATUS RDY是否为0，为0表示adc ready
+	HAL_Delay(10);  // 等待 ADS124S06 复位完成 (约 1ms @ FCLK=4.096MHz)
+
+	// 检查STATUS RDY是否为0, 为0表示adc ready, 最多重试10次
 	uint8_t RxData_ADC[3] = {0};
+	uint8_t retry = 0;
 	ADC_RREG(ADC_STATUS_REG, RxData_ADC);
-	
-	while((RxData_ADC[2] & 0x40) != 0){     //如果RDY位不为0，则说明没有ready，再reset
+
+	while((RxData_ADC[2] & 0x40) != 0 && retry < 10){
 		HAL_GPIO_WritePin(GPIOA, AD_RESET_Pin, GPIO_PIN_RESET);
 		HAL_Delay(5);
 		HAL_GPIO_WritePin(GPIOA, AD_RESET_Pin, GPIO_PIN_SET);
+		HAL_Delay(10);  // 复位后等待 ADC 就绪
 		ADC_RREG(ADC_STATUS_REG, RxData_ADC);
+		retry++;
 	}
 	
 	//给STATUS FL_POR置0，Indicates Register  has  been  cleared  and  no  POR  event  has  occurred

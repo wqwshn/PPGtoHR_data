@@ -220,25 +220,30 @@ int main(void)
    * ==================================================================== */
 
   /* 1. ADC 初始化 */
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before ADC_Init\r\n", 22, 1000);
   ADC_Init();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: ADC Init OK\r\n", 20, 1000);
   HAL_Delay(200);
 
   /* 2. MIMU 初始化 */
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before MIMU_Init\r\n", 23, 1000);
   MIMU_Init();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Init OK\r\n", 21, 1000);
   HAL_Delay(200);
 
   /* 3. MAX30101 初始化 */
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before MAX30101_Init\r\n", 28, 1000);
   MAX30101_Init();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG Init OK\r\n", 20, 1000);
   HAL_Delay(200);
 
   /* 4. 根据当前模式配置 PPG 参数 */
 #if (CURRENT_WORK_MODE == MODE_SPO2)
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before PPG SpO2 Config\r\n", 29, 1000);
   PPG_Config_SpO2_Hardcoded();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG SpO2 Mode Config.\r\n", 30, 100);
 #else
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before PPG HR Config\r\n", 28, 1000);
   PPG_Config_Green_Hardcoded();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG HR Mode Config.\r\n", 28, 100);
 #endif
@@ -247,8 +252,11 @@ int main(void)
    * 心率在线算法初始化 (仅在线心率模式)
    * ==================================================================== */
 #if (!ENABLE_RAW_DATA_PACKET)
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before HR_Init\r\n", 21, 1000);
   HR_GetDefaultConfig(&hr_config);
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: HR_GetDefaultConfig OK\r\n", 29, 1000);
   HR_Init(&hr_config, &hr_state);
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: HR_Init OK\r\n", 17, 1000);
   algorithm_initialized = 1;
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: HR Algorithm Init OK\r\n", 29, 1000);
 #endif

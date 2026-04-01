@@ -25,6 +25,60 @@
 #include "usart.h"
 /* USER CODE END Includes */
 
+/* USER CODE BEGIN 0 */
+/* HardFault 诊断: 打印故障寄存器和栈帧 */
+static void Hard_Fault_Handler(uint32_t *stack_frame)
+{
+    uint32_t r0  = stack_frame[0];
+    uint32_t r1  = stack_frame[1];
+    uint32_t r2  = stack_frame[2];
+    uint32_t r3  = stack_frame[3];
+    uint32_t r12 = stack_frame[4];
+    uint32_t lr  = stack_frame[5];
+    uint32_t pc  = stack_frame[6];
+    uint32_t psr = stack_frame[7];
+
+    /* 用阻塞式 UART 输出, 不依赖中断 */
+    extern UART_HandleTypeDef huart2;
+    char buf[80];
+
+    /* CFSR: Configurable Fault Status Register */
+    uint32_t cfsr = SCB->CFSR;
+    uint32_t hfsr = SCB->HFSR;
+    uint32_t mmfar = SCB->MMFAR;
+    uint32_t bfar = SCB->BFAR;
+
+    /* 简单格式化输出 PC 和 CFSR (避免 snprintf 依赖) */
+    const char *hdr = "!HARDFAULT!";
+    HAL_UART_Transmit(&huart2, (uint8_t*)hdr, 11, 1000);
+
+    /* 手动转16进制: PC */
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = ' '; buf[1] = 'P'; buf[2] = 'C'; buf[3] = '=';
+    for (int i = 0; i < 8; i++) buf[4+i] = hex[(pc >> (28-i*4)) & 0xF];
+    buf[12] = '\r'; buf[13] = '\n';
+    HAL_UART_Transmit(&huart2, (uint8_t*)buf, 14, 1000);
+
+    /* LR */
+    buf[1] = 'L'; buf[2] = 'R'; buf[3] = '=';
+    for (int i = 0; i < 8; i++) buf[4+i] = hex[(lr >> (28-i*4)) & 0xF];
+    HAL_UART_Transmit(&huart2, (uint8_t*)buf, 14, 1000);
+
+    /* CFSR */
+    buf[1] = 'C'; buf[2] = 'F'; buf[3] = 'S';
+    for (int i = 0; i < 8; i++) buf[4+i] = hex[(cfsr >> (28-i*4)) & 0xF];
+    HAL_UART_Transmit(&huart2, (uint8_t*)buf, 14, 1000);
+
+    /* HFSR */
+    buf[1] = 'H'; buf[2] = 'F'; buf[3] = 'S';
+    for (int i = 0; i < 8; i++) buf[4+i] = hex[(hfsr >> (28-i*4)) & 0xF];
+    HAL_UART_Transmit(&huart2, (uint8_t*)buf, 14, 1000);
+
+    (void)r0; (void)r1; (void)r2; (void)r3; (void)r12; (void)mmfar; (void)bfar; (void)psr;
+    while(1);
+}
+/* USER CODE END 0 */
+
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN TD */
 
@@ -98,7 +152,13 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-
+  __asm volatile (
+    "TST    LR, #4          \n"
+    "ITE    EQ              \n"
+    "MRSEQ  R0, MSP         \n"
+    "MRSNE  R0, PSP         \n"
+    "B      Hard_Fault_Handler \n"
+  );
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
