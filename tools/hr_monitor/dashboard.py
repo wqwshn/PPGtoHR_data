@@ -15,9 +15,11 @@ PPG Heart Rate Monitor - 仪表盘主窗口
 """
 
 import csv
+import os
 import time
 from collections import deque
 from datetime import datetime
+from pathlib import Path
 
 from PyQt5.QtCore import Qt, QTimer, QPropertyAnimation, pyqtProperty, QSize
 from PyQt5.QtGui import QFont, QColor, QPalette
@@ -59,7 +61,14 @@ TRANSLATIONS = {
         "disconnect": "断开",
         "refresh": "刷新",
         "clear": "清屏",
+        "record": "录制",
+        "stop": "停止",
         "save": "保存",
+        "select_save_path": "选择保存路径",
+        "recording_to": "录制中 ->",
+        "record_saved": "录制已保存",
+        "record_cancelled": "录制已取消",
+        "record_pts": "录制",
         "lang": "EN",
         "disconnected": "未连接",
         "connected": "已连接",
@@ -88,7 +97,14 @@ TRANSLATIONS = {
         "disconnect": "Disconnect",
         "refresh": "Refresh",
         "clear": "Clear",
+        "record": "Record",
+        "stop": "Stop",
         "save": "Save",
+        "select_save_path": "Select Save Path",
+        "recording_to": "Recording ->",
+        "record_saved": "Recording saved",
+        "record_cancelled": "Recording cancelled",
+        "record_pts": "Rec",
         "lang": "中文",
         "disconnected": "Disconnected",
         "connected": "Connected",
@@ -255,6 +271,13 @@ class Dashboard(QMainWindow):
         self._recorded_data: list[dict] = []
         self._recording_start: float | None = None
 
+        # 上一包设备时间戳, 用于 BLE 重发去重
+        self._last_device_ts: int = -1
+
+        # 录制状态
+        self._is_recording = False
+        self._record_file_path: str | None = None
+
         self._init_ui()
         self._init_plot()
 
@@ -344,11 +367,11 @@ class Dashboard(QMainWindow):
         self._btn_clear.clicked.connect(self._clear_screen)
         layout.addWidget(self._btn_clear)
 
-        self._btn_save = QPushButton(t["save"])
-        self._btn_save.setObjectName("btn_save")
-        self._btn_save.setStyleSheet(f"""
+        self._btn_record = QPushButton(t["record"])
+        self._btn_record.setObjectName("btn_record")
+        self._btn_record.setStyleSheet(f"""
             QPushButton {{
-                background-color: {COLOR_GREEN};
+                background-color: {COLOR_RED};
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -357,11 +380,11 @@ class Dashboard(QMainWindow):
                 font-weight: bold;
             }}
             QPushButton:hover {{
-                background-color: #1AAF50;
+                background-color: #DC2626;
             }}
         """)
-        self._btn_save.clicked.connect(self._save_data)
-        layout.addWidget(self._btn_save)
+        self._btn_record.clicked.connect(self._toggle_record)
+        layout.addWidget(self._btn_record)
 
         layout.addStretch()
 
@@ -568,31 +591,38 @@ class Dashboard(QMainWindow):
     def update_data(self, pkt: HRPacket):
         """接收并展示一个心率数据包"""
         t = TRANSLATIONS[self._lang]
+
+        # BLE 重发去重: 相同设备时间戳的包只处理一次
+        if pkt.timestamp == self._last_device_ts:
+            return
+        self._last_device_ts = pkt.timestamp
+
         self._pkt_count += 1
         elapsed = time.time() - self._start_time
 
-        # 记录数据到缓冲区
-        if self._recording_start is None:
-            self._recording_start = elapsed
-        self._recorded_data.append({
-            "time": round(elapsed - self._recording_start, 3),
-            "fused_bpm": pkt.fused_bpm,
-            "is_motion": int(pkt.is_motion),
-            "win_filled": int(pkt.win_filled),
-            "hr_lms_hf": pkt.hr_lms_hf,
-            "hr_lms_acc": pkt.hr_lms_acc,
-            "hr_fft": pkt.hr_fft,
-            "ppg_mean": pkt.ppg_mean,
-            "motion_calibrated": int(pkt.motion_calibrated),
-            "timestamp": pkt.timestamp,
-            "calib_progress": pkt.calib_progress,
-            "sampling_rate": pkt.sampling_rate,
-            "hf1_ac_mv": pkt.hf1_ac_mv,
-            "hf1_ppg_corr": pkt.hf1_ppg_corr,
-            "acc_ppg_corr": pkt.acc_ppg_corr,
-            "hf2_ac_mv": pkt.hf2_ac_mv,
-            "hf2_ppg_corr": pkt.hf2_ppg_corr,
-        })
+        # 录制数据到缓冲区 (仅录制状态)
+        if self._is_recording:
+            if self._recording_start is None:
+                self._recording_start = elapsed
+            self._recorded_data.append({
+                "time": round(elapsed - self._recording_start, 3),
+                "fused_bpm": pkt.fused_bpm,
+                "is_motion": int(pkt.is_motion),
+                "win_filled": int(pkt.win_filled),
+                "hr_lms_hf": pkt.hr_lms_hf,
+                "hr_lms_acc": pkt.hr_lms_acc,
+                "hr_fft": pkt.hr_fft,
+                "ppg_mean": pkt.ppg_mean,
+                "motion_calibrated": int(pkt.motion_calibrated),
+                "timestamp": pkt.timestamp,
+                "calib_progress": pkt.calib_progress,
+                "sampling_rate": pkt.sampling_rate,
+                "hf1_ac_mv": pkt.hf1_ac_mv,
+                "hf1_ppg_corr": pkt.hf1_ppg_corr,
+                "acc_ppg_corr": pkt.acc_ppg_corr,
+                "hf2_ac_mv": pkt.hf2_ac_mv,
+                "hf2_ppg_corr": pkt.hf2_ppg_corr,
+            })
 
         # 心率数字
         bpm = pkt.fused_bpm
@@ -661,9 +691,12 @@ class Dashboard(QMainWindow):
                 self._plot_widget.setYRange(y_min, y_max)
 
         # 状态栏
+        rec_info = ""
+        if self._is_recording:
+            rec_info = f"  |  {t['record_pts']}: {len(self._recorded_data)} pts"
         self._status_label.setText(
             f"{t['pkt_count']}: {self._pkt_count}  |  "
-            f"{t['uptime']}: {int(elapsed)}s  |  "
+            f"{t['uptime']}: {int(elapsed)}s{rec_info}  |  "
             f"PPG: {pkt.ppg_mean}  |  "
             f"Calib: {pkt.calib_progress}/8"
         )
@@ -686,6 +719,27 @@ class Dashboard(QMainWindow):
         # 清除记录缓冲区
         self._recorded_data.clear()
         self._recording_start = None
+
+        # 重置录制状态
+        self._is_recording = False
+        self._record_file_path = None
+        self._last_device_ts = -1
+        t_btn = TRANSLATIONS[self._lang]
+        self._btn_record.setText(t_btn["record"])
+        self._btn_record.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_RED};
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: #DC2626;
+            }}
+        """)
 
         # 重置曲线
         self._curve.setData([], [])
@@ -728,41 +782,97 @@ class Dashboard(QMainWindow):
         self._plot_widget.setXRange(0, 10)
         self._plot_widget.setYRange(40, 160)
 
-    def _save_data(self):
-        """将已记录的解算数据保存为 CSV 文件"""
-        if not self._recorded_data:
-            self._status_label.setText(TRANSLATIONS[self._lang]["save_fail"] + " (no data)")
-            return
+    def _toggle_record(self):
+        """录制按钮切换: 未录制->选路径开始录制, 录制中->停止并保存"""
+        t = TRANSLATIONS[self._lang]
 
-        default_name = f"hr_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        path, _ = QFileDialog.getSaveFileName(
-            self, TRANSLATIONS[self._lang]["save"],
-            default_name, "CSV Files (*.csv)"
-        )
-        if not path:
-            return
-
-        try:
-            fieldnames = [
-                "time", "fused_bpm", "is_motion", "win_filled",
-                "hr_lms_hf", "hr_lms_acc", "hr_fft",
-                "ppg_mean", "motion_calibrated", "timestamp", "calib_progress",
-                "sampling_rate", "hf1_ac_mv", "hf1_ppg_corr", "acc_ppg_corr",
-                "hf2_ac_mv", "hf2_ppg_corr",
-            ]
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(self._recorded_data)
-
-            self._status_label.setText(
-                f"{TRANSLATIONS[self._lang]['save_success']}: {path} "
-                f"({len(self._recorded_data)} rows)"
+        if not self._is_recording:
+            # -- 开始录制: 先选择保存路径 --
+            desktop = Path.home() / "Desktop"
+            if not desktop.exists():
+                desktop = Path.home()
+            default_name = str(desktop / f"hr_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            path, _ = QFileDialog.getSaveFileName(
+                self, t["select_save_path"],
+                default_name, "CSV Files (*.csv)"
             )
-        except Exception as e:
+            if not path:
+                self._status_label.setText(t["record_cancelled"])
+                return
+
+            self._record_file_path = path
+            self._recorded_data.clear()
+            self._recording_start = None
+            self._is_recording = True
+
+            # 按钮变为 "停止" 样式
+            self._btn_record.setText(t["stop"])
+            self._btn_record.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR_RED};
+                    color: white;
+                    border: 2px solid #FF0000;
+                    border-radius: 6px;
+                    padding: 6px 16px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: #B91C1C;
+                }}
+            """)
             self._status_label.setText(
-                f"{TRANSLATIONS[self._lang]['save_fail']}: {e}"
+                f"{t['recording_to']} {os.path.basename(path)}"
             )
+        else:
+            # -- 停止录制并保存 --
+            self._is_recording = False
+
+            if self._recorded_data and self._record_file_path:
+                try:
+                    self._write_csv(self._record_file_path)
+                    self._status_label.setText(
+                        f"{t['record_saved']}: {self._record_file_path} "
+                        f"({len(self._recorded_data)} pts)"
+                    )
+                except Exception as e:
+                    self._status_label.setText(
+                        f"{t['save_fail']}: {e}"
+                    )
+            else:
+                self._status_label.setText(t["record_cancelled"])
+
+            # 恢复按钮为 "录制" 样式
+            self._btn_record.setText(t["record"])
+            self._btn_record.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {COLOR_RED};
+                    color: white;
+                    border: none;
+                    border-radius: 6px;
+                    padding: 6px 16px;
+                    font-size: 13px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: #DC2626;
+                }}
+            """)
+            self._record_file_path = None
+
+    def _write_csv(self, path: str):
+        """将录制缓冲区写入 CSV 文件"""
+        fieldnames = [
+            "time", "fused_bpm", "is_motion", "win_filled",
+            "hr_lms_hf", "hr_lms_acc", "hr_fft",
+            "ppg_mean", "motion_calibrated", "timestamp", "calib_progress",
+            "sampling_rate", "hf1_ac_mv", "hf1_ppg_corr", "acc_ppg_corr",
+            "hf2_ac_mv", "hf2_ppg_corr",
+        ]
+        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._recorded_data)
 
     def _toggle_language(self):
         """在中/英文之间切换 UI 语言"""
@@ -780,7 +890,7 @@ class Dashboard(QMainWindow):
         self._btn_disconnect.setText(t["disconnect"])
         self._btn_refresh.setText(t["refresh"])
         self._btn_clear.setText(t["clear"])
-        self._btn_save.setText(t["save"])
+        self._btn_record.setText(t["stop"] if self._is_recording else t["record"])
         self._btn_lang.setText(t["lang"])
 
         # 算法路径卡片标题
