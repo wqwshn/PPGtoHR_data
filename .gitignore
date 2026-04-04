@@ -54,3 +54,12 @@ __pycache__/
 # 一次性测试脚本
 tools/hr_monitor/test_gui.py
 tools/hr_monitor/test_protocol.py
+
+# 录制生成的数据文件
+*.csv
+
+# 芯片数据手册 (二进制大文件)
+docs/*.pdf
+
+# 已融合的参考上位机 (源码已在 tools/monitor/)
+tools/data_monitor/
