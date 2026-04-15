@@ -2,8 +2,9 @@
 PPG Heart Rate Monitor - 程序入口
 
 用法:
-  实际串口模式:   python main.py
-  模拟数据模式:   python main.py --simulate
+  实际串口模式:       python main.py
+  HR 模拟数据模式:    python main.py --simulate
+  多光谱原始数据模拟:  python main.py --raw
 """
 from __future__ import annotations
 
@@ -37,6 +38,7 @@ class AppController:
 
         self._reader = SerialReader(port, baudrate=115200)
         self._reader.packet_received.connect(self._dash.update_data)
+        self._reader.raw_packet_received.connect(self._dash.update_raw_data)
         self._reader.error_occurred.connect(self._on_error)
         self._reader.connection_changed.connect(self._dash.set_connected)
         self._reader.start()
@@ -56,9 +58,14 @@ class AppController:
 
 def main():
     parser = argparse.ArgumentParser(description="PPG Heart Rate Monitor")
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "--simulate", action="store_true",
-        help="Run with simulated data (no serial port needed)",
+        help="Run with simulated HR data (no serial port needed)",
+    )
+    group.add_argument(
+        "--raw", action="store_true",
+        help="Run with simulated multi-spectral raw data at 100Hz",
     )
     args = parser.parse_args()
 
@@ -70,7 +77,9 @@ def main():
     win.show()
 
     if args.simulate:
-        win.start_simulation()
+        win.start_simulation(raw_mode=False)
+    elif args.raw:
+        win.start_simulation(raw_mode=True)
     else:
         ctrl = AppController(win)
         app.aboutToQuit.connect(ctrl.cleanup)

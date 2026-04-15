@@ -1,6 +1,7 @@
 """
 PPG Heart Rate Monitor - 协议定义与帧解析
-31 字节心率结果包 (1Hz, 蓝牙/串口 115200bps):
+
+帧类型 A: 31 字节心率结果包 (1Hz, 0xAA 0xCC):
   偏移  字段                类型        说明
   0-1   帧头                uint8 x2    0xAA, 0xCC
   2-3   融合心率 BPM        uint16 BE   x10 精度 (72.5 = 725)
@@ -21,6 +22,18 @@ PPG Heart Rate Monitor - 协议定义与帧解析
   27-28 HF2-PPG 相关系数     int16 BE   x10000 (-1.0~+1.0)
   29    XOR 校验             uint8       bytes[2..28] 异或
   30    帧尾                uint8       0xCC
+
+帧类型 B: 33 字节多光谱原始数据包 (100Hz, 0xAA 0xBB):
+  偏移  字段              类型        说明
+  0-1   帧头              uint8 x2    0xAA, 0xBB
+  2-9   ADC 桥路          uint16 x4   桥顶2, 桥顶1, 桥中2, 桥中1
+  10-15 ACC X/Y/Z         int16 x3    加速度计 (完整16位)
+  16-21 GYRO X/Y/Z        int16 x3    陀螺仪角速度
+  22-24 PPG Green         3 bytes     17-bit 原始ADC值
+  25-27 PPG Red           3 bytes     17-bit 原始ADC值
+  28-30 PPG IR            3 bytes     17-bit 原始ADC值
+  31    XOR 校验           uint8       bytes[2..30] 异或
+  32    帧尾              uint8       0xCC
 """
 
 from __future__ import annotations
@@ -127,4 +140,88 @@ def parse_hr_packet(data: bytes) -> Optional[HRPacket]:
         acc_ppg_corr=acc_corr_raw / 10000.0,
         hf2_ac_mv=hf2_ac_raw / 100.0,
         hf2_ppg_corr=hf2_corr_raw / 10000.0,
+    )
+
+
+# ── 原始数据帧常量 ──────────────────────────────────────
+RAW_HEADER_BYTE_1 = 0xBB
+RAW_PACKET_LEN = 33
+RAW_XOR_START = 2
+RAW_XOR_END = 30   # 含
+
+
+@dataclass
+class RawDataPacket:
+    """解析后的多光谱原始传感器数据包 (33 字节)"""
+    # ADC 桥路
+    adc_hf2: int          # ADS124S06 桥顶2
+    adc_hf1: int          # ADS124S06 桥顶1
+    adc_mid2: int         # ADS124S06 桥中2
+    adc_mid1: int         # ADS124S06 桥中1
+    # 加速度计 (完整 16-bit)
+    acc_x: int
+    acc_y: int
+    acc_z: int
+    # 陀螺仪 (角速度)
+    gyro_x: int
+    gyro_y: int
+    gyro_z: int
+    # PPG 多光谱
+    ppg_green: int        # 绿光 17-bit 原始值
+    ppg_red: int          # 红光 17-bit 原始值
+    ppg_ir: int           # 红外光 17-bit 原始值
+
+
+def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
+    """
+    解析 33 字节多光谱原始数据包.
+
+    Args:
+        data: 完整的 33 字节原始帧
+
+    Returns:
+        RawDataPacket 解析成功, None 校验失败
+    """
+    if len(data) != RAW_PACKET_LEN:
+        return None
+
+    if data[0] != HEADER_BYTE_0 or data[1] != RAW_HEADER_BYTE_1:
+        return None
+
+    if data[32] != FOOTER_BYTE:
+        return None
+
+    # XOR 校验: bytes[2..30]
+    xor_val = 0
+    for i in range(RAW_XOR_START, RAW_XOR_END + 1):
+        xor_val ^= data[i]
+    if xor_val != data[31]:
+        return None
+
+    # ADC (uint16 BE, 无符号)
+    adc_hf2  = (data[2] << 8)  | data[3]
+    adc_hf1  = (data[4] << 8)  | data[5]
+    adc_mid2 = (data[6] << 8)  | data[7]
+    adc_mid1 = (data[8] << 8)  | data[9]
+
+    # ACC (int16 BE, 有符号)
+    acc_x = _decode_int16((data[10] << 8) | data[11])
+    acc_y = _decode_int16((data[12] << 8) | data[13])
+    acc_z = _decode_int16((data[14] << 8) | data[15])
+
+    # GYRO (int16 BE, 有符号)
+    gyro_x = _decode_int16((data[16] << 8) | data[17])
+    gyro_y = _decode_int16((data[18] << 8) | data[19])
+    gyro_z = _decode_int16((data[20] << 8) | data[21])
+
+    # PPG 三通道 (3 bytes each, 17-bit 对齐后)
+    ppg_green = ((data[22] << 16) | (data[23] << 8) | data[24]) & 0x01FFFF
+    ppg_red   = ((data[25] << 16) | (data[26] << 8) | data[27]) & 0x01FFFF
+    ppg_ir    = ((data[28] << 16) | (data[29] << 8) | data[30]) & 0x01FFFF
+
+    return RawDataPacket(
+        adc_hf2=adc_hf2, adc_hf1=adc_hf1, adc_mid2=adc_mid2, adc_mid1=adc_mid1,
+        acc_x=acc_x, acc_y=acc_y, acc_z=acc_z,
+        gyro_x=gyro_x, gyro_y=gyro_y, gyro_z=gyro_z,
+        ppg_green=ppg_green, ppg_red=ppg_red, ppg_ir=ppg_ir,
     )

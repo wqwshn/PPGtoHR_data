@@ -4,7 +4,7 @@ PPG Monitor - 串口读取线程
 在独立 QThread 中运行串口读取, 使用状态机逐字节解析帧.
 支持双协议:
   - 31 字节心率结果包 (0xAA 0xCC) -> hr_packet_received
-  - 21 字节原始传感器包 (0xAA 0xBB) -> raw_packet_received
+  - 33 字节多光谱原始传感器包 (0xAA 0xBB) -> raw_packet_received
 """
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ class SerialReader(QThread):
                             state = 2
                         elif byte == RAW_HEADER_BYTE_1:  # 0xBB -> 原始数据包
                             buf.append(byte)
-                            expected_len = RAW_PACKET_LEN  # 21
+                            expected_len = RAW_PACKET_LEN  # 33
                             state = 2
                         elif byte == HEADER_BYTE_0:
                             # 连续 0xAA, 重新开始

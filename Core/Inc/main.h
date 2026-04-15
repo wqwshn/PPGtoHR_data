@@ -125,9 +125,13 @@ void Error_Handler(void);
 
 /* ============================================================ */
 
-/* 统一数据包长度为21字节 */
-#define PACKET_LEN 21
-#define XOR_CHECK_LEN 17  // 校验区域统一为17字节 (ADC(8) + ACC(3) + PPG(4) + 扩展(2))
+/* 扩展数据包长度: 33字节 (含三通道PPG + 完整ACC + 陀螺仪) */
+#define PACKET_LEN 33
+#define XOR_CHECK_LEN 29  /* 校验区域: ADC(8) + ACC(6) + GYRO(6) + PPG(9) = 29 */
+
+/* 数据段偏移定义 */
+#define GYRO_START_INDEX  16   /* 2(头) + 8(ADC) + 6(ACC) = 16 */
+#define PPG_START_INDEX   22   /* 2(头) + 8(ADC) + 6(ACC) + 6(GYRO) = 22 */
 
 /* USER CODE END Private defines */
 
