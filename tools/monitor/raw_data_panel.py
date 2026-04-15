@@ -1,8 +1,8 @@
 """
 PPG Monitor - 原始传感器数据可视化面板
 
-暗色主题实时波形面板, 接收 21 字节原始传感器数据包 (125Hz),
-展示 PPG 波形 / 热膜桥压 / 三轴加速度 / SpO2 温度.
+暗色主题实时波形面板, 接收 33 字节多光谱原始传感器数据包 (100Hz),
+展示 PPG 三通道波形 (Green/Red/IR) / 热膜桥压 / 三轴加速度 / 陀螺仪角速度.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QFileDialog, QStackedWidget,
+    QFileDialog,
 )
 import pyqtgraph as pg
 
@@ -50,13 +50,14 @@ class RawDataPanel(QWidget):
         self._data_Accx = deque(maxlen=PLOT_POINTS)
         self._data_Accy = deque(maxlen=PLOT_POINTS)
         self._data_Accz = deque(maxlen=PLOT_POINTS)
+        self._data_Gyrox = deque(maxlen=PLOT_POINTS)
+        self._data_Gyroy = deque(maxlen=PLOT_POINTS)
+        self._data_Gyroz = deque(maxlen=PLOT_POINTS)
         self._data_ppg_g = deque(maxlen=PLOT_POINTS)
         self._data_ppg_r = deque(maxlen=PLOT_POINTS)
         self._data_ppg_ir = deque(maxlen=PLOT_POINTS)
-        self._data_temp = deque(maxlen=PLOT_POINTS)
 
         # 状态
-        self._current_mode = "hr"
         self._packet_count = 0
         self._sample_count = 0  # 每秒重置, 用于采样率计算
         self._start_time = time.time()
@@ -94,12 +95,30 @@ class RawDataPanel(QWidget):
         # 顶部信息条
         layout.addWidget(self._build_info_bar())
 
-        # PPG 波形区 (模式切换)
-        self._mode_stack = QStackedWidget()
-        self._build_hr_mode_widget()
-        self._build_spo2_mode_widget()
-        self._mode_stack.setCurrentIndex(0)
-        layout.addWidget(self._mode_stack, 3)
+        # PPG 三通道波形区: 左=Green, 右上=Red, 右下=IR
+        ppg_widget = QWidget()
+        ppg_layout = QHBoxLayout(ppg_widget)
+        ppg_layout.setContentsMargins(0, 0, 0, 0)
+        ppg_layout.setSpacing(6)
+
+        # 左侧: 绿光
+        self._plot_ppg_g, self._curve_ppg_g = self._make_plot(
+            "PPG Green", COLOR_GREEN
+        )
+        ppg_layout.addWidget(self._plot_ppg_g, 1)
+
+        # 右侧: 红光 + 红外 上下排列
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        self._plot_ppg_r, self._curve_ppg_r = self._make_plot("PPG Red", COLOR_RED)
+        self._plot_ppg_ir, self._curve_ppg_ir = self._make_plot("PPG IR", "#3B82F6")
+        right_layout.addWidget(self._plot_ppg_r)
+        right_layout.addWidget(self._plot_ppg_ir)
+        ppg_layout.addWidget(right, 1)
+
+        layout.addWidget(ppg_widget, 3)
 
         # 桥顶电压 Ut1, Ut2
         ut_widget = QWidget()
@@ -129,6 +148,13 @@ class RawDataPanel(QWidget):
         self._curve_accz = self._plot_acc.plot(pen=pg.mkPen("#3B82F6", width=1.5))
         self._plot_acc.addLegend(offset=(60, 10))
         layout.addWidget(self._plot_acc, 2)
+
+        # 三轴陀螺仪
+        self._plot_gyro, self._curve_gyrox = self._make_plot("GYRO (dps)", COLOR_RED)
+        self._curve_gyroy = self._plot_gyro.plot(pen=pg.mkPen(COLOR_GREEN, width=1.5))
+        self._curve_gyroz = self._plot_gyro.plot(pen=pg.mkPen("#3B82F6", width=1.5))
+        self._plot_gyro.addLegend(offset=(60, 10))
+        layout.addWidget(self._plot_gyro, 2)
 
     def _build_info_bar(self) -> QFrame:
         """顶部状态信息条"""
@@ -165,54 +191,6 @@ class RawDataPanel(QWidget):
 
         return frame
 
-    def _build_hr_mode_widget(self):
-        """心率模式: PPG 绿光波形"""
-        widget = QWidget()
-        hlayout = QHBoxLayout(widget)
-        hlayout.setContentsMargins(0, 0, 0, 0)
-        hlayout.setSpacing(6)
-        self._plot_ppg_g, self._curve_ppg_g = self._make_plot(
-            "PPG Green", COLOR_GREEN
-        )
-        hlayout.addWidget(self._plot_ppg_g)
-        self._mode_stack.addWidget(widget)
-
-    def _build_spo2_mode_widget(self):
-        """血氧模式: 红光+红外 / 温度+SpO2"""
-        widget = QWidget()
-        hlayout = QHBoxLayout(widget)
-        hlayout.setContentsMargins(0, 0, 0, 0)
-        hlayout.setSpacing(6)
-
-        # 左侧: 红光 + 红外 上下排列
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(6)
-        self._plot_ppg_r, self._curve_ppg_r = self._make_plot("PPG Red", COLOR_RED)
-        self._plot_ppg_ir, self._curve_ppg_ir = self._make_plot("PPG IR", "#3B82F6")
-        left_layout.addWidget(self._plot_ppg_r)
-        left_layout.addWidget(self._plot_ppg_ir)
-        hlayout.addWidget(left, 1)
-
-        # 右侧: 温度 + SpO2 预留
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(6)
-        self._plot_temp, self._curve_temp = self._make_plot(
-            "Temp (C)", COLOR_ORANGE
-        )
-        self._plot_spo2, self._curve_spo2 = self._make_plot(
-            "SpO2 (%) - Reserved", "#D946EF"
-        )
-        self._plot_spo2.setYRange(70, 100)
-        right_layout.addWidget(self._plot_temp, 1)
-        right_layout.addWidget(self._plot_spo2, 1)
-        hlayout.addWidget(right, 1)
-
-        self._mode_stack.addWidget(widget)
-
     def _make_plot(self, title: str, color: str) -> tuple[pg.PlotWidget, pg.PlotDataItem]:
         """创建一个暗色风格的 pyqtgraph 绘图组件"""
         pw = pg.PlotWidget()
@@ -227,15 +205,9 @@ class RawDataPanel(QWidget):
     # ── 数据处理 ─────────────────────────────────────────
 
     def handle_raw_data(self, pkt: RawDataPacket):
-        """接收并缓存一个原始数据包"""
+        """接收并缓存一个多光谱原始数据包"""
         self._sample_count += 1
         self._packet_count += 1
-
-        # 模式自动切换
-        target_mode = "hr" if pkt.is_hr_mode else "spo2"
-        if target_mode != self._current_mode:
-            self._current_mode = target_mode
-            self._mode_stack.setCurrentIndex(0 if target_mode == "hr" else 1)
 
         # 追加数据缓冲区
         self._data_Uc1.append(pkt.Uc1)
@@ -245,22 +217,23 @@ class RawDataPanel(QWidget):
         self._data_Accx.append(pkt.acc_x)
         self._data_Accy.append(pkt.acc_y)
         self._data_Accz.append(pkt.acc_z)
+        self._data_Gyrox.append(pkt.gyro_x)
+        self._data_Gyroy.append(pkt.gyro_y)
+        self._data_Gyroz.append(pkt.gyro_z)
         self._data_ppg_g.append(pkt.ppg_green)
         self._data_ppg_r.append(pkt.ppg_red)
         self._data_ppg_ir.append(pkt.ppg_ir)
-        self._data_temp.append(pkt.temperature)
 
         # CSV 实时写入
         if self._is_recording and self._csv_writer:
             elapsed = round(time.time() - self._recording_start_time, 3)
             self._csv_writer.writerow([
-                elapsed, pkt.mode_str,
+                elapsed,
                 round(pkt.Uc1, 5), round(pkt.Uc2, 5),
                 round(pkt.Ut1, 5), round(pkt.Ut2, 5),
-                round(pkt.acc_x, 5), round(pkt.acc_y, 5),
-                round(pkt.acc_z, 5),
-                round(pkt.ppg_green, 5), round(pkt.ppg_red, 5),
-                round(pkt.ppg_ir, 5), round(pkt.temperature, 2),
+                round(pkt.acc_x, 5), round(pkt.acc_y, 5), round(pkt.acc_z, 5),
+                round(pkt.gyro_x, 3), round(pkt.gyro_y, 3), round(pkt.gyro_z, 3),
+                pkt.ppg_green, pkt.ppg_red, pkt.ppg_ir,
             ])
             self._csv_file.flush()
 
@@ -269,8 +242,9 @@ class RawDataPanel(QWidget):
 
     def _update_info_bar(self, pkt: RawDataPacket):
         t = TRANSLATIONS[self._lang]
-        mode_text = t.get("hr_mode", "HR Mode") if pkt.is_hr_mode else t.get("spo2_mode", "SpO2 Mode")
-        self._lbl_mode.setText(f"{t.get('mode', 'Mode')}: {mode_text}")
+        self._lbl_mode.setText(
+            f"{t.get('mode', 'Mode')}: Multi-LED (G+R+IR)"
+        )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: {self._packet_count}")
 
     def _update_plots(self):
@@ -278,22 +252,26 @@ class RawDataPanel(QWidget):
         if len(self._data_Uc1) == 0:
             return
 
-        # 模式相关波形
-        if self._current_mode == "hr":
-            self._curve_ppg_g.setData(list(self._data_ppg_g))
-        else:
-            self._curve_ppg_r.setData(list(self._data_ppg_r))
-            self._curve_ppg_ir.setData(list(self._data_ppg_ir))
-            self._curve_temp.setData(list(self._data_temp))
+        # PPG 三通道波形 (始终更新)
+        self._curve_ppg_g.setData(list(self._data_ppg_g))
+        self._curve_ppg_r.setData(list(self._data_ppg_r))
+        self._curve_ppg_ir.setData(list(self._data_ppg_ir))
 
-        # 通用波形 (始终更新)
+        # 桥压波形
         self._curve_Ut1.setData(list(self._data_Ut1))
         self._curve_Ut2.setData(list(self._data_Ut2))
         self._curve_Uc1.setData(list(self._data_Uc1))
         self._curve_Uc2.setData(list(self._data_Uc2))
+
+        # 加速度计波形
         self._curve_accx.setData(list(self._data_Accx))
         self._curve_accy.setData(list(self._data_Accy))
         self._curve_accz.setData(list(self._data_Accz))
+
+        # 陀螺仪波形
+        self._curve_gyrox.setData(list(self._data_Gyrox))
+        self._curve_gyroy.setData(list(self._data_Gyroy))
+        self._curve_gyroz.setData(list(self._data_Gyroz))
 
     def _update_sample_rate(self):
         """1秒定时器: 刷新采样率"""
@@ -324,10 +302,11 @@ class RawDataPanel(QWidget):
             self._csv_file = open(path, "w", newline="", encoding="utf-8-sig")
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow([
-                "Time(s)", "Mode",
+                "Time(s)",
                 "Uc1(mV)", "Uc2(mV)", "Ut1(mV)", "Ut2(mV)",
                 "AccX(g)", "AccY(g)", "AccZ(g)",
-                "PPG_Green", "PPG_Red", "PPG_IR", "Temp(C)",
+                "GyroX(dps)", "GyroY(dps)", "GyroZ(dps)",
+                "PPG_Green", "PPG_Red", "PPG_IR",
             ])
             self._recording_start_time = time.time()
             self._is_recording = True
@@ -356,8 +335,8 @@ class RawDataPanel(QWidget):
         for d in (
             self._data_Uc1, self._data_Uc2, self._data_Ut1, self._data_Ut2,
             self._data_Accx, self._data_Accy, self._data_Accz,
+            self._data_Gyrox, self._data_Gyroy, self._data_Gyroz,
             self._data_ppg_g, self._data_ppg_r, self._data_ppg_ir,
-            self._data_temp,
         ):
             d.clear()
 
@@ -372,10 +351,10 @@ class RawDataPanel(QWidget):
         # 清空曲线
         for curve in (
             self._curve_ppg_g, self._curve_ppg_r, self._curve_ppg_ir,
-            self._curve_temp, self._curve_spo2,
             self._curve_Ut1, self._curve_Ut2,
             self._curve_Uc1, self._curve_Uc2,
             self._curve_accx, self._curve_accy, self._curve_accz,
+            self._curve_gyrox, self._curve_gyroy, self._curve_gyroz,
         ):
             curve.setData([])
 
@@ -407,9 +386,6 @@ class RawDataPanel(QWidget):
         self._plot_ppg_ir.setTitle(
             t.get("ppg_ir", "PPG IR"), color=COLOR_TEXT_DIM, size="10pt"
         )
-        self._plot_temp.setTitle(
-            t.get("temperature", "Temp (C)"), color=COLOR_TEXT_DIM, size="10pt"
-        )
         self._plot_Ut1.setTitle(
             t.get("bridge_top", "Ut1 (mV)"), color=COLOR_TEXT_DIM, size="10pt"
         )
@@ -425,6 +401,9 @@ class RawDataPanel(QWidget):
         self._plot_acc.setTitle(
             t.get("acceleration", "ACC (g)"), color=COLOR_TEXT_DIM, size="10pt"
         )
+        self._plot_gyro.setTitle(
+            "GYRO (dps)", color=COLOR_TEXT_DIM, size="10pt"
+        )
 
     # ── 模拟模式 ─────────────────────────────────────────
 
@@ -438,12 +417,14 @@ class RawDataPanel(QWidget):
         self._sim_timer.stop()
 
     def _sim_tick(self):
-        """生成一个模拟原始数据包"""
+        """生成一个模拟多光谱原始数据包"""
         self._sim_step += 1
-        t = self._sim_step / 125.0
+        t = self._sim_step / 100.0
 
-        # 合成 PPG 信号 (~1.2Hz 心率)
-        ppg = 1000.0 + 50.0 * math.sin(2 * math.pi * 1.2 * t)
+        # 合成 PPG 信号 (~1.2Hz 心率, 17-bit 量级)
+        base = 50000
+        pulse = 8000 * math.sin(2 * math.pi * 1.2 * t)
+        noise = (hash(int(t * 1000)) % 1000 - 500)
 
         pkt = RawDataPacket(
             Ut2=1200.0 + 5 * math.sin(0.1 * t),
@@ -453,11 +434,11 @@ class RawDataPanel(QWidget):
             acc_x=0.01 * math.sin(2 * t),
             acc_y=0.01 * math.cos(3 * t),
             acc_z=1.0 + 0.005 * math.sin(t),
-            ppg_green=ppg,
-            ppg_red=0.0,
-            ppg_ir=0.0,
-            temperature=36.5,
-            is_hr_mode=True,
-            mode_str="HR",
+            gyro_x=2.0 * math.sin(0.5 * t),
+            gyro_y=-1.5 * math.cos(0.7 * t),
+            gyro_z=0.8 * math.sin(0.3 * t + 1.0),
+            ppg_green=int(base + pulse + noise) & 0x01FFFF,
+            ppg_red=int(base * 0.8 + pulse * 0.6 + noise * 0.8) & 0x01FFFF,
+            ppg_ir=int(base * 0.7 + pulse * 0.5 + noise * 0.7) & 0x01FFFF,
         )
         self.handle_raw_data(pkt)
