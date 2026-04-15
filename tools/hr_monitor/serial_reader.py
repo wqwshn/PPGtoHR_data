@@ -2,7 +2,10 @@
 PPG Heart Rate Monitor - 串口读取线程
 
 在独立 QThread 中运行串口读取, 使用状态机逐字节解析帧,
-解析成功后通过 pyqtSignal 发射 HRPacket 给 UI 线程.
+支持两种帧类型:
+  - HR 结果包 (0xAA 0xCC, 31 字节)
+  - 多光谱原始数据包 (0xAA 0xBB, 33 字节)
+解析成功后通过 pyqtSignal 发射给 UI 线程.
 """
 from __future__ import annotations
 
@@ -14,14 +17,18 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from protocol import (
     HEADER_BYTE_0, HEADER_BYTE_1, PACKET_LEN,
     parse_hr_packet, HRPacket,
+    RAW_HEADER_BYTE_1, RAW_PACKET_LEN,
+    parse_raw_packet, RawDataPacket,
 )
 
 
 class SerialReader(QThread):
     """串口读取与帧解析线程"""
 
-    # 信号: 解析成功一个完整帧
+    # 信号: 解析成功一个 HR 结果帧
     packet_received = pyqtSignal(HRPacket)
+    # 信号: 解析成功一个原始数据帧
+    raw_packet_received = pyqtSignal(RawDataPacket)
     # 信号: 错误信息
     error_occurred = pyqtSignal(str)
     # 信号: 连接状态变化
@@ -52,9 +59,11 @@ class SerialReader(QThread):
             self.connection_changed.emit(False)
             return
 
-        # 状态机: 0=等待帧头0, 1=等待帧头1, 2=收集 payload
+        # 状态机: 0=等待帧头0xAA, 1=判断第二字节, 2=收集 payload
         state = 0
         buf = bytearray()
+        packet_type = None  # 'hr' or 'raw'
+        max_len = max(PACKET_LEN, RAW_PACKET_LEN)
 
         try:
             while self._running:
@@ -65,12 +74,17 @@ class SerialReader(QThread):
 
                 for byte in raw:
                     if state == 0:
-                        if byte == HEADER_BYTE_0:
+                        if byte == HEADER_BYTE_0:  # 0xAA
                             buf = bytearray([byte])
                             state = 1
                     elif state == 1:
-                        if byte == HEADER_BYTE_1:
+                        if byte == HEADER_BYTE_1:  # 0xCC -> HR packet
                             buf.append(byte)
+                            packet_type = 'hr'
+                            state = 2
+                        elif byte == RAW_HEADER_BYTE_1:  # 0xBB -> Raw packet
+                            buf.append(byte)
+                            packet_type = 'raw'
                             state = 2
                         elif byte == HEADER_BYTE_0:
                             # 连续 0xAA, 重新开始
@@ -79,14 +93,27 @@ class SerialReader(QThread):
                             state = 0
                     elif state == 2:
                         buf.append(byte)
-                        if len(buf) == PACKET_LEN:
+                        # 超长保护: 防止噪声导致 buf 无限增长
+                        if len(buf) > max_len:
+                            state = 0
+                            buf = bytearray()
+                            packet_type = None
+                            continue
+                        expected_len = PACKET_LEN if packet_type == 'hr' else RAW_PACKET_LEN
+                        if len(buf) == expected_len:
                             # 收集满一帧, 尝试解析
-                            pkt = parse_hr_packet(bytes(buf))
-                            if pkt is not None:
-                                self.packet_received.emit(pkt)
+                            if packet_type == 'hr':
+                                pkt = parse_hr_packet(bytes(buf))
+                                if pkt is not None:
+                                    self.packet_received.emit(pkt)
+                            else:
+                                pkt = parse_raw_packet(bytes(buf))
+                                if pkt is not None:
+                                    self.raw_packet_received.emit(pkt)
                             # 重置状态机
                             state = 0
                             buf = bytearray()
+                            packet_type = None
         except serial.SerialException as e:
             if self._running:
                 self.error_occurred.emit(f"Serial error: {e}")

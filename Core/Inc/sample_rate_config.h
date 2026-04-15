@@ -63,8 +63,10 @@
 #define MAX30101_SPO2_CONFIG_VAL    0x73
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* ADC=16384nA(011) | SR=800sps(100) | PW=411us(11) = 0x73 */
-#define MAX30101_SPO2_CONFIG_VAL    0x73
+/* ADC=8192nA(10) | SR=800sps(100) | PW=215us(10) = 0x52
+ * 三光路约束: 3 LEDs x 215us = 645us < 1250us (1/800sps)
+ * 降至17-bit以满足三通道时序, ADC量程同步降至8192nA适配 */
+#define MAX30101_SPO2_CONFIG_VAL    0x52
 
 #elif (PPG_SAMPLE_RATE == 125)
 /* ADC=16384nA(011) | SR=1000sps(101) | PW=411us(11) = 0x77 */
@@ -97,11 +99,28 @@
 #define PPG_RATE_STR    "50Hz (800/16x)"
 
 #elif (PPG_SAMPLE_RATE == 100)
-#define PPG_RATE_STR    "100Hz (800/8x)"
+#define PPG_RATE_STR    "100Hz (800/8x, Multi-LED G+R+IR)"
 
 #elif (PPG_SAMPLE_RATE == 125)
 #define PPG_RATE_STR    "125Hz (1000/4x)"
 
+#endif
+
+/* ============================================================
+ * 多光路时隙配置 (Multi-LED Mode, 仅 100Hz 有效)
+ * SLOT1=GREEN(011), SLOT2=RED(001), SLOT3=IR(010), SLOT4=Disabled
+ * CTRL1: [6:4]SLOT2=001 | [2:0]SLOT1=011 = 0x13
+ * CTRL2: [6:4]SLOT4=000 | [2:0]SLOT3=010 = 0x02
+ * ============================================================ */
+#if (PPG_SAMPLE_RATE == 100)
+#define MAX30101_MULTI_LED_CTRL1_VAL   0x13U
+#define MAX30101_MULTI_LED_CTRL2_VAL   0x02U
+#define MAX30101_PPG_CHANNELS          3U
+#define MAX30101_FIFO_SAMPLE_BYTES     (MAX30101_PPG_CHANNELS * 3U) /* 9 */
+#define MAX30101_PPG_RIGHT_SHIFT       1U   /* 17-bit: shift=3-code(2)=1 */
+#define MAX30101_PPG_VALID_MASK        0x01FFFFU
+#else
+#error "Multi-LED triple-wavelength mode currently supports 100Hz only"
 #endif
 
 #endif /* __SAMPLE_RATE_CONFIG_H */

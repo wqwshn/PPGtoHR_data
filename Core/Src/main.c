@@ -40,10 +40,8 @@
 /* 注意: 所有系统配置开关 (工作模式/数据发送/PPG通道/采样率)
  *       已统一移至 main.h 的 USER CODE 区域, 请在该文件修改 */
 
-// PPG 数据起始索引 (2头 + 8ADC + 3ACC = 13)
-#define PPG_START_INDEX 13
-// 温度数据起始索引 (2头 + 8ADC + 3ACC + 4PPG = 17)
-#define TEMP_START_INDEX 17
+// PPG 和 GYRO 偏移已在 main.h 中统一定义
+// PPG_START_INDEX = 22, GYRO_START_INDEX = 16
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -379,10 +377,21 @@ int main(void)
       /* --- 1. 打包 ADC (保留原逻辑) --- */
       // 数据已由中断填充在 allData[2] ~ allData[9]
 
-      /* --- 2. 打包 ACC 高位 (保留原逻辑) --- */
-      allData[10] = ACC_XYZ[1]; // X High
-      allData[11] = ACC_XYZ[3]; // Y High
-      allData[12] = ACC_XYZ[5]; // Z High
+      /* --- 2. 打包 ACC 完整 16 位 (X/Y/Z 各2字节, 大端) --- */
+      allData[10] = ACC_XYZ[1];  /* X_H */
+      allData[11] = ACC_XYZ[0];  /* X_L */
+      allData[12] = ACC_XYZ[3];  /* Y_H */
+      allData[13] = ACC_XYZ[2];  /* Y_L */
+      allData[14] = ACC_XYZ[5];  /* Z_H */
+      allData[15] = ACC_XYZ[4];  /* Z_L */
+
+      /* --- 2.5 打包 GYRO 完整 16 位 --- */
+      allData[GYRO_START_INDEX]     = GYRO_XYZ[1];  /* GX_H */
+      allData[GYRO_START_INDEX + 1] = GYRO_XYZ[0];  /* GX_L */
+      allData[GYRO_START_INDEX + 2] = GYRO_XYZ[3];  /* GY_H */
+      allData[GYRO_START_INDEX + 3] = GYRO_XYZ[2];  /* GY_L */
+      allData[GYRO_START_INDEX + 4] = GYRO_XYZ[5];  /* GZ_H */
+      allData[GYRO_START_INDEX + 5] = GYRO_XYZ[4];  /* GZ_L */
 
       /* --- 3. PPG 数据采集 --- */
       uint8_t wr_ptr = PPG_ReadOneByte(FIFO_WR_PTR_REG);
@@ -432,42 +441,56 @@ int main(void)
           ir_avg = last_ir_avg;
       }
 
-      allData[PPG_START_INDEX + 0] = (red_avg >> 8) & 0xff;
-      allData[PPG_START_INDEX + 1] = red_avg & 0xff;
-      allData[PPG_START_INDEX + 2] = (ir_avg >> 8) & 0xff;
-      allData[PPG_START_INDEX + 3] = ir_avg & 0xff;
-
-      // 扩展位：温度数据
-      allData[TEMP_START_INDEX] = die_temp_int;
-      allData[TEMP_START_INDEX + 1] = die_temp_frac;
+      allData[PPG_START_INDEX + 0] = die_temp_int;          /* 温度整数(借用Green高位) */
+      allData[PPG_START_INDEX + 1] = die_temp_frac;        /* 温度小数(借用Green中位) */
+      allData[PPG_START_INDEX + 2] = 0x00;
+      allData[PPG_START_INDEX + 3] = (red_avg >> 16) & 0xff;
+      allData[PPG_START_INDEX + 4] = (red_avg >> 8) & 0xff;
+      allData[PPG_START_INDEX + 5] = red_avg & 0xff;
+      allData[PPG_START_INDEX + 6] = (ir_avg >> 16) & 0xff;
+      allData[PPG_START_INDEX + 7] = (ir_avg >> 8) & 0xff;
+      allData[PPG_START_INDEX + 8] = ir_avg & 0xff;
 
 #else
-      /* --- 3.3 心率模式: 计算 PPG 均值用于算法 + 保留原始数据包 --- */
-      uint32_t sum_green = 0;
-      uint8_t buf[3];
-      /* 缓存上次有效 PPG 均值, 防止 FIFO 空读时数据跳变到 0
-       * 原因: 50Hz/100Hz 模式下 MAX30101 有效输出速率与 MCU 读取速率精确匹配,
-       * 两者时钟独立导致微小频漂, 周期性出现 FIFO 为空 (sample_count=0),
-       * 若直接发送 sum=0 会在上位机产生跳变到 1000.0 的周期性毛刺 */
-      static uint32_t last_ppg_avg = 0;
+      /* --- 3.3 心率模式: 三通道 PPG 采集 (Green+Red+IR) --- */
+      uint32_t sum_green = 0, sum_red = 0, sum_ir = 0;
+      uint8_t buf[MAX30101_FIFO_SAMPLE_BYTES]; /* 9 字节 */
+
+      /* 缓存上次有效均值, 防止 FIFO 空读时跳变到 0 */
+      static uint32_t last_green_avg = 0;
+      static uint32_t last_red_avg = 0;
+      static uint32_t last_ir_avg = 0;
 
       for (uint8_t i = 0; i < sample_count; i++) {
-          PPG_ReadFIFO_Burst(buf, 3);
-          sum_green += ((buf[0] << 16) | (buf[1] << 8) | buf[2]) & 0x03FFFF;
+          PPG_ReadFIFO_Burst(buf, MAX30101_FIFO_SAMPLE_BYTES);
+          /* 17-bit 数据, 左对齐在24-bit中, 需右移1位对齐 */
+          uint32_t raw;
+          raw = ((uint32_t)buf[0] << 16) | ((uint32_t)buf[1] << 8) | buf[2];
+          sum_green += (raw >> MAX30101_PPG_RIGHT_SHIFT) & MAX30101_PPG_VALID_MASK;
+          raw = ((uint32_t)buf[3] << 16) | ((uint32_t)buf[4] << 8) | buf[5];
+          sum_red += (raw >> MAX30101_PPG_RIGHT_SHIFT) & MAX30101_PPG_VALID_MASK;
+          raw = ((uint32_t)buf[6] << 16) | ((uint32_t)buf[7] << 8) | buf[8];
+          sum_ir += (raw >> MAX30101_PPG_RIGHT_SHIFT) & MAX30101_PPG_VALID_MASK;
       }
 
-      /* 计算均值并缓存; FIFO 空时沿用上次有效值 */
       if (sample_count > 0) {
-          last_ppg_avg = sum_green / sample_count;
+          last_green_avg = sum_green / sample_count;
+          last_red_avg   = sum_red / sample_count;
+          last_ir_avg    = sum_ir / sample_count;
       }
 
-      /* 原始数据包: 发送有效均值 (avg + count=1 格式) */
-      allData[PPG_START_INDEX]     = (last_ppg_avg >> 16) & 0xFF;
-      allData[PPG_START_INDEX + 1] = (last_ppg_avg >> 8)  & 0xFF;
-      allData[PPG_START_INDEX + 2] =  last_ppg_avg        & 0xFF;
-      allData[PPG_START_INDEX + 3] = 1;
+      /* 打包 PPG 三通道 (各3字节, 高位在前) */
+      allData[PPG_START_INDEX]     = (last_green_avg >> 16) & 0xFF;
+      allData[PPG_START_INDEX + 1] = (last_green_avg >> 8)  & 0xFF;
+      allData[PPG_START_INDEX + 2] =  last_green_avg        & 0xFF;
+      allData[PPG_START_INDEX + 3] = (last_red_avg >> 16)   & 0xFF;
+      allData[PPG_START_INDEX + 4] = (last_red_avg >> 8)    & 0xFF;
+      allData[PPG_START_INDEX + 5] =  last_red_avg          & 0xFF;
+      allData[PPG_START_INDEX + 6] = (last_ir_avg >> 16)    & 0xFF;
+      allData[PPG_START_INDEX + 7] = (last_ir_avg >> 8)     & 0xFF;
+      allData[PPG_START_INDEX + 8] =  last_ir_avg           & 0xFF;
 
-      /* 算法数据: 推送 float 采样点 (仅在线心率模式) */
+      /* 算法数据推送 (仅在线心率模式, 暂用绿光通道) */
 #if (!ENABLE_RAW_DATA_PACKET)
       if (algorithm_initialized && sample_count > 0) {
           float ppg_val = (float)sum_green / (float)sample_count;
@@ -487,18 +510,15 @@ int main(void)
                         (float)hf1_raw, (float)hf2_raw);
       }
 #endif /* !ENABLE_RAW_DATA_PACKET */
-
-      allData[TEMP_START_INDEX] = 0x00;
-      allData[TEMP_START_INDEX + 1] = 0xFF;
 #endif
 
-      /* --- 4. 计算校验位 (校验从 allData[2] 开始的 17 个字节) --- */
-      allData[19] = CheckXOR(&allData[2], XOR_CHECK_LEN);
+      /* --- 4. 校验位 (bytes[2..30], 共29字节) --- */
+      allData[31] = CheckXOR(&allData[2], XOR_CHECK_LEN);
 
-      /* --- 5. 填充帧尾 --- */
-      allData[20] = 0xCC;
+      /* --- 5. 帧尾 --- */
+      allData[32] = 0xCC;
 
-      /* --- 6. DMA 发送 (21 字节) --- */
+      /* --- 6. DMA 发送 (33 字节) --- */
 #if (ENABLE_RAW_DATA_PACKET)
       HAL_UART_Transmit_DMA(&huart2, allData, PACKET_LEN);
 #endif
@@ -650,33 +670,28 @@ static void PPG_Config_SpO2_Hardcoded(void)
 }
 #endif /* MODE_SPO2 守卫结束 */
 
-// PPG 绿光心率模式配置 (参数由 sample_rate_config.h 决定)
+// PPG 多光路配置 (Green+Red+IR, 参数由 sample_rate_config.h 决定)
 static void PPG_Config_Green_Hardcoded(void)
 {
-    // --- 1. Mode Configuration (0x09) = 0x07: Multi-LED 模式 ---
-    // (HR模式只能用绿光，必须使用Multi-LED模式)
+    /* --- 1. Mode Configuration = 0x07: Multi-LED 模式 --- */
     PPG_WriteOneByte(MODE_CONFIG_REG, 0x07);
 
-    // --- 2. LED_CONTROL1 (0x11) = 0x03: SLOT1=LED3(Green), SLOT2关闭 ---
-    PPG_WriteOneByte(LED_CONTROL1, 0x03);
+    /* --- 2. 多光路时隙: SLOT1=Green, SLOT2=Red, SLOT3=IR --- */
+    PPG_WriteOneByte(LED_CONTROL1, MAX30101_MULTI_LED_CTRL1_VAL); /* 0x13 */
+    PPG_WriteOneByte(LED_CONTROL2, MAX30101_MULTI_LED_CTRL2_VAL); /* 0x02 */
 
-    // --- 3. LED_CONTROL2 (0x12) = 0x00: 关闭 SLOT3 和 SLOT4 ---
-    PPG_WriteOneByte(LED_CONTROL2, 0x00);
+    /* --- 3. LED 电流: 三通道统一约 12.6mA --- */
+    PPG_WriteOneByte(LED3_PA_REG, 0x3F);  /* Green */
+    PPG_WriteOneByte(LED1_PA_REG, 0x3F);  /* Red */
+    PPG_WriteOneByte(LED2_PA_REG, 0x3F);  /* IR */
 
-    // --- 4. LED3_pa_REG (0x0E) = 0x71: 绿光亮度 ---
-    PPG_WriteOneByte(LED3_PA_REG, 0x71);
-
-    // --- 5. SPO2_CONFIG_REG (0x0A) ---
-    // [7:5]=ADC_RGE  [4:2]=SR  [1:0]=PW(411us)
-    // 由 sample_rate_config.h 根据采样率自动选择内部速率和平均策略
+    /* --- 4. SPO2_CONFIG: RGE + SR + PW (由 sample_rate_config.h 决定) --- */
     PPG_WriteOneByte(SPO2_CONFIG_REG, MAX30101_SPO2_CONFIG_VAL);
 
-    // --- 6. FIFO_CONFIG_REG (0x08) ---
-    // [7:5]=SMP_AVE  [4]=ROLLOVER  [3:0]=A_FULL(15)
-    // 由 sample_rate_config.h 根据采样率自动选择硬件平均倍数
+    /* --- 5. FIFO_CONFIG: SMP_AVE + ROLLOVER + A_FULL --- */
     PPG_WriteOneByte(FIFO_CONFIG_REG, MAX30101_FIFO_CONFIG_VAL);
 
-    // --- 7. 清除 FIFO 指针 ---
+    /* --- 6. 清除 FIFO 指针 --- */
     PPG_WriteOneByte(FIFO_WR_PTR_REG, 0x00);
     PPG_WriteOneByte(OVF_COUNTER_REG, 0x00);
     PPG_WriteOneByte(FIFO_RD_PTR_REG, 0x00);
@@ -755,8 +770,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
         }
 
         // 读取 MIMU 数据
-        if(ADC_1to4Voltage_flag == 4)
+        if(ADC_1to4Voltage_flag == 4) {
             ACC_6BytesRead();
+            GYRO_6BytesRead();
+        }
     }
 }
 

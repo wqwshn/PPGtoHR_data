@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
 )
 import pyqtgraph as pg
 
-from protocol import HRPacket
+from protocol import HRPacket, RawDataPacket
 
 
 # ── 配色常量 ──────────────────────────────────────────────
@@ -286,6 +286,18 @@ class Dashboard(QMainWindow):
         self._sim_timer.timeout.connect(self._sim_tick)
         self._sim_step = 0
 
+        # 原始数据波形缓存 (最近 5 秒, 100Hz = 500 点)
+        _raw_pts = 500
+        self._raw_ppg_green = deque(maxlen=_raw_pts)
+        self._raw_ppg_red = deque(maxlen=_raw_pts)
+        self._raw_ppg_ir = deque(maxlen=_raw_pts)
+        self._raw_time = deque(maxlen=_raw_pts)
+        self._raw_start_time = time.time()
+        self._raw_pkt_count = 0
+        self._is_raw_mode = False
+        self._sim_raw_timer = QTimer(self)
+        self._sim_raw_timer.timeout.connect(self._sim_raw_tick)
+
     # ── UI 构建 ──────────────────────────────────────────
 
     def _init_ui(self):
@@ -305,8 +317,11 @@ class Dashboard(QMainWindow):
         top_row.addWidget(self._build_paths_card(), 3)
         root.addLayout(top_row, 3)
 
-        # 中间: 趋势图
-        root.addWidget(self._build_trend_card(), 4)
+        # 中间: 趋势图 (HR模式) / PPG波形 (Raw模式), 可切换
+        self._trend_card = self._build_trend_card()
+        self._ppg_wave_card = self._build_ppg_waveform_card()
+        self._ppg_wave_card.hide()  # 默认隐藏
+        root.addWidget(self._trend_card, 4)
 
         # 状态栏
         self._status_bar = QStatusBar()
@@ -520,6 +535,57 @@ class Dashboard(QMainWindow):
 
         return card
 
+    def _build_ppg_waveform_card(self) -> QFrame:
+        """构建三通道 PPG 波形显示卡片: 左=Green, 右上=Red, 右下=IR"""
+        card = QFrame()
+        card.setObjectName("card")
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+
+        # 左侧: 绿光波形
+        left = QVBoxLayout()
+        lbl_green = QLabel("PPG Green")
+        lbl_green.setStyleSheet(f"color: #22C55E; font-size: 12px; font-weight: bold;")
+        left.addWidget(lbl_green)
+        self._plot_green = pg.PlotWidget()
+        self._plot_green.showGrid(y=True, alpha=0.15)
+        self._plot_green.getAxis("bottom").setPen(pg.mkPen(COLOR_TEXT_DIM))
+        self._plot_green.getAxis("left").setPen(pg.mkPen(COLOR_TEXT_DIM))
+        self._plot_green.hideAxis("bottom")
+        self._curve_green = self._plot_green.plot(pen=pg.mkPen("#22C55E", width=1.5))
+        left.addWidget(self._plot_green)
+        layout.addLayout(left, 1)
+
+        # 右侧: 红光 + 红外上下排列
+        right = QVBoxLayout()
+        right.setSpacing(4)
+
+        lbl_red = QLabel("PPG Red")
+        lbl_red.setStyleSheet(f"color: #EF4444; font-size: 12px; font-weight: bold;")
+        right.addWidget(lbl_red)
+        self._plot_red = pg.PlotWidget()
+        self._plot_red.showGrid(y=True, alpha=0.15)
+        self._plot_red.getAxis("bottom").setPen(pg.mkPen(COLOR_TEXT_DIM))
+        self._plot_red.getAxis("left").setPen(pg.mkPen(COLOR_TEXT_DIM))
+        self._plot_red.hideAxis("bottom")
+        self._curve_red = self._plot_red.plot(pen=pg.mkPen("#EF4444", width=1.5))
+        right.addWidget(self._plot_red, 1)
+
+        lbl_ir = QLabel("PPG IR")
+        lbl_ir.setStyleSheet(f"color: #F97316; font-size: 12px; font-weight: bold;")
+        right.addWidget(lbl_ir)
+        self._plot_ir = pg.PlotWidget()
+        self._plot_ir.showGrid(y=True, alpha=0.15)
+        self._plot_ir.getAxis("bottom").setPen(pg.mkPen(COLOR_TEXT_DIM))
+        self._plot_ir.getAxis("left").setPen(pg.mkPen(COLOR_TEXT_DIM))
+        self._plot_ir.hideAxis("bottom")
+        self._curve_ir = self._plot_ir.plot(pen=pg.mkPen("#F97316", width=1.5))
+        right.addWidget(self._plot_ir, 1)
+
+        layout.addLayout(right, 1)
+        return card
+
     def _build_trend_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("card")
@@ -706,6 +772,86 @@ class Dashboard(QMainWindow):
         self._conn_label.setText(msg)
         self._conn_label.setStyleSheet(f"color: {COLOR_RED}; font-size: 12px;")
 
+    # ── 原始数据模式 ───────────────────────────────────────
+
+    def update_raw_data(self, pkt: RawDataPacket):
+        """接收并展示一个多光谱原始传感器数据包"""
+        self._raw_pkt_count += 1
+        elapsed = time.time() - self._raw_start_time
+
+        # 首次收到原始数据时切换到 Raw 模式
+        if not self._is_raw_mode:
+            self._switch_to_raw_mode()
+
+        # 追加波形数据
+        self._raw_ppg_green.append(pkt.ppg_green)
+        self._raw_ppg_red.append(pkt.ppg_red)
+        self._raw_ppg_ir.append(pkt.ppg_ir)
+        self._raw_time.append(elapsed)
+
+        # 更新波形曲线
+        t_list = list(self._raw_time)
+        self._curve_green.setData(t_list, list(self._raw_ppg_green))
+        self._curve_red.setData(t_list, list(self._raw_ppg_red))
+        self._curve_ir.setData(t_list, list(self._raw_ppg_ir))
+
+        # 自动滚动 X 轴 (显示最近 5 秒)
+        if t_list:
+            t_max = t_list[-1]
+            t_min = max(0, t_max - 5)
+            for pw in (self._plot_green, self._plot_red, self._plot_ir):
+                pw.setXRange(t_min, max(t_max, t_min + 1))
+
+            # 每个通道独立自动缩放 Y 轴
+            for data_deque, pw in [
+                (self._raw_ppg_green, self._plot_green),
+                (self._raw_ppg_red, self._plot_red),
+                (self._raw_ppg_ir, self._plot_ir),
+            ]:
+                vals = list(data_deque)
+                if vals:
+                    y_min = max(0, min(vals) - 5000)
+                    y_max = min(131072, max(vals) + 5000)
+                    pw.setYRange(y_min, y_max)
+
+        # 状态栏
+        self._status_label.setText(
+            f"Raw: {self._raw_pkt_count} pts  |  "
+            f"Green: {pkt.ppg_green}  Red: {pkt.ppg_red}  IR: {pkt.ppg_ir}  |  "
+            f"ACC: ({pkt.acc_x}, {pkt.acc_y}, {pkt.acc_z})  "
+            f"GYRO: ({pkt.gyro_x}, {pkt.gyro_y}, {pkt.gyro_z})"
+        )
+
+    def _switch_to_raw_mode(self):
+        """切换到原始数据显示模式"""
+        self._is_raw_mode = True
+        # 找到中间区域的布局并替换组件
+        central = self.centralWidget()
+        root = central.layout()
+        # trend_card 在布局中的索引: toolbar(0), top_row(1), trend(2), status(3)
+        for i in range(root.count()):
+            item = root.itemAt(i)
+            if item and item.widget() == self._trend_card:
+                root.removeWidget(self._trend_card)
+                self._trend_card.hide()
+                root.insertWidget(i, self._ppg_wave_card)
+                self._ppg_wave_card.show()
+                break
+
+    def _switch_to_hr_mode(self):
+        """切换到心率算法显示模式"""
+        self._is_raw_mode = False
+        central = self.centralWidget()
+        root = central.layout()
+        for i in range(root.count()):
+            item = root.itemAt(i)
+            if item and item.widget() == self._ppg_wave_card:
+                root.removeWidget(self._ppg_wave_card)
+                self._ppg_wave_card.hide()
+                root.insertWidget(i, self._trend_card)
+                self._trend_card.show()
+                break
+
     # ── 新增功能: 清屏 / 保存 / 语言切换 ─────────────────
 
     def _clear_screen(self):
@@ -781,6 +927,24 @@ class Dashboard(QMainWindow):
         # 重置趋势图 X 轴范围
         self._plot_widget.setXRange(0, 10)
         self._plot_widget.setYRange(40, 160)
+
+        # 清除原始数据
+        self._raw_ppg_green.clear()
+        self._raw_ppg_red.clear()
+        self._raw_ppg_ir.clear()
+        self._raw_time.clear()
+        self._raw_pkt_count = 0
+        self._raw_start_time = time.time()
+
+        # 切换回 HR 模式
+        if self._is_raw_mode:
+            self._switch_to_hr_mode()
+
+        # 清除波形曲线
+        if hasattr(self, '_curve_green'):
+            self._curve_green.setData([], [])
+            self._curve_red.setData([], [])
+            self._curve_ir.setData([], [])
 
     def _toggle_record(self):
         """录制按钮切换: 未录制->选路径开始录制, 录制中->停止并保存"""
@@ -906,17 +1070,23 @@ class Dashboard(QMainWindow):
 
     # ── 模拟模式 ─────────────────────────────────────────
 
-    def start_simulation(self):
+    def start_simulation(self, raw_mode=False):
         """启动模拟数据模式"""
         t = TRANSLATIONS[self._lang]
         self._sim_step = 0
-        self._sim_timer.start(1000)  # 1Hz 模拟
-        self.set_connected(True)
-        self._conn_label.setText(t["simulated"])
+        if raw_mode:
+            self._sim_raw_timer.start(10)  # 100Hz 模拟原始数据
+            self.set_connected(True)
+            self._conn_label.setText(f"{t['simulated']} (Raw 100Hz)")
+        else:
+            self._sim_timer.start(1000)  # 1Hz HR 模拟
+            self.set_connected(True)
+            self._conn_label.setText(t["simulated"])
 
     def stop_simulation(self):
         """停止模拟"""
         self._sim_timer.stop()
+        self._sim_raw_timer.stop()
 
     def _sim_tick(self):
         """生成一个模拟心率包"""
@@ -952,3 +1122,24 @@ class Dashboard(QMainWindow):
         )
         self.update_data(pkt)
 
+    def _sim_raw_tick(self):
+        """生成一个模拟多光谱原始数据包 (100Hz)"""
+        import math
+        self._sim_step += 1
+        t = self._sim_step * 0.01
+
+        # 模拟 PPG 信号 (正弦波 + 噪声, ~72 BPM)
+        base = 50000
+        pulse = 8000 * math.sin(2 * math.pi * 1.2 * t)
+        noise = (hash(int(t * 1000)) % 1000 - 500)
+        green = int(base + pulse + noise) & 0x01FFFF
+        red = int(base * 0.8 + pulse * 0.6 + noise * 0.8) & 0x01FFFF
+        ir = int(base * 0.7 + pulse * 0.5 + noise * 0.7) & 0x01FFFF
+
+        pkt = RawDataPacket(
+            adc_hf2=1000, adc_hf1=2000, adc_mid2=500, adc_mid1=800,
+            acc_x=100, acc_y=-50, acc_z=16384,
+            gyro_x=10, gyro_y=-5, gyro_z=3,
+            ppg_green=green, ppg_red=red, ppg_ir=ir,
+        )
+        self.update_raw_data(pkt)
