@@ -90,6 +90,10 @@ extract_makefile_list("C_DEFS" c_defs "-D" TRUE)
 print_list(c_defs)
 add_compile_definitions(${c_defs})
 # Add extra definitions here
+if(DEFINED PPG_SAMPLE_RATE)
+    add_compile_definitions(PPG_SAMPLE_RATE=${PPG_SAMPLE_RATE})
+    message(STATUS "PPG_SAMPLE_RATE: ${PPG_SAMPLE_RATE}")
+endif()
 
 # Enable assembler files preprocessing
 add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-x$<SEMICOLON>assembler-with-cpp>)

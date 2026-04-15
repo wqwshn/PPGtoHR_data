@@ -5,7 +5,7 @@
  * 1. 通过修改 main.c 顶部配置开关切换工作模式和数据发送
  * 2. MAX30101使用FIFO异步采样模式，主循环批量读取并计算均值
  * 3. 心率模式：绿光单LED，血氧模式：红光+红外双LED
- * 4. 支持 1Hz HR 结果包和可选的 125Hz 原始数据包
+ * 4. 支持 1Hz HR 结果包和可选的原始数据包 (采样率由 sample_rate_config.h 配置)
  */
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
@@ -25,6 +25,7 @@
 #include "MAX30101_2.h"
 #include "ppg_channel.h"
 #include "hr_algorithm.h"
+#include "sample_rate_config.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -44,10 +45,10 @@
 #define CURRENT_WORK_MODE MODE_HEART_RATE
 
 /* 数据发送模式选择 (两种模式互斥, 不会同时发送)
- * 0 = 在线心率模式: 运行算法, 仅发送 1Hz HR 结果包 (0xAA 0xCC)
- * 1 = 原始数据模式: 仅发送 125Hz 原始数据包 (0xAA 0xBB), 不运行算法
+ * 0 = 在线心率模式: 运行算法, 仅发送 1Hz HR 结果包 (0xAA 0xCC) [仅125Hz]
+ * 1 = 原始数据模式: 仅发送原始数据包 (0xAA 0xBB), 不运行算法 [所有采样率]
  */
-#define ENABLE_RAW_DATA_PACKET 0
+#define ENABLE_RAW_DATA_PACKET 1
 
 /* ============================================================ */
 
@@ -210,13 +211,13 @@ int main(void)
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: ADC Found!\r\n", 19, 100);
   HAL_Delay(100);
 
-  /* 3. MIMU 检测 (阻塞式) */
-  while (!MIMU_check()) {
-      HAL_UART_Transmit(&huart2, (uint8_t*)MIMUbuff, sizeof(MIMUbuff), 100);
-      HAL_Delay(500);
-  }
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Found!\r\n", 20, 100);
-  HAL_Delay(100);
+//   /* 3. MIMU 检测 (阻塞式) */
+//   while (!MIMU_check()) {
+//       HAL_UART_Transmit(&huart2, (uint8_t*)MIMUbuff, sizeof(MIMUbuff), 100);
+//       HAL_Delay(500);
+//   }
+//   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Found!\r\n", 20, 100);
+//   HAL_Delay(100);
 
   /* ====================================================================
    * 模块初始化配置 (Sensor Init Phase)
@@ -341,7 +342,7 @@ int main(void)
             /* 校准进度 (0-8) */
             hr_packet[17] = (hr_state.calib_windows_done < 8) ? hr_state.calib_windows_done : 8;
 
-            /* 采样率 (Hz) - 固定 125 */
+            /* 采样率 (Hz) - 由算法头文件定义 */
             hr_packet[18] = HR_FS;
 
             /* HF1 AC 幅值 (x100 mV, LSB std -> mV) -- 桥顶1 */
@@ -405,7 +406,7 @@ int main(void)
       /* --- 3.2 温度补偿状态机 (1Hz, 非阻塞) --- */
       static uint8_t temp_tick = 0;
       temp_tick++;
-      if (temp_tick >= 125) {
+      if (temp_tick >= PPG_SAMPLE_RATE) {
           temp_tick = 0;
       }
       // 触发阶段：temp_tick == 0 时启动温度转换
@@ -651,7 +652,7 @@ static void PPG_Config_SpO2_Hardcoded(void)
 }
 #endif /* MODE_SPO2 守卫结束 */
 
-// PPG 绿光心率模式硬编码配置
+// PPG 绿光心率模式配置 (参数由 sample_rate_config.h 决定)
 static void PPG_Config_Green_Hardcoded(void)
 {
     // --- 1. Mode Configuration (0x09) = 0x07: Multi-LED 模式 ---
@@ -664,21 +665,18 @@ static void PPG_Config_Green_Hardcoded(void)
     // --- 3. LED_CONTROL2 (0x12) = 0x00: 关闭 SLOT3 和 SLOT4 ---
     PPG_WriteOneByte(LED_CONTROL2, 0x00);
 
-    // --- 4. LED3_pa_REG (0x0E) = 0x5F: 绿光亮度约 19mA ---
+    // --- 4. LED3_pa_REG (0x0E) = 0x71: 绿光亮度 ---
     PPG_WriteOneByte(LED3_PA_REG, 0x71);
 
-    // --- 5. SPO2_CONFIG_REG (0x0A) = 0x77 ---
-    // Bit7-5: 011 = 16384nA 满量程
-    // Bit4-2: 111 = 1000sps 内部采样频率
-    // Bit1-0: 11 = 411us/18-bit 最长脉宽
-    PPG_WriteOneByte(SPO2_CONFIG_REG, 0x77);
+    // --- 5. SPO2_CONFIG_REG (0x0A) ---
+    // [7:5]=ADC_RGE  [4:2]=SR  [1:0]=PW(411us)
+    // 由 sample_rate_config.h 根据采样率自动选择内部速率和平均策略
+    PPG_WriteOneByte(SPO2_CONFIG_REG, MAX30101_SPO2_CONFIG_VAL);
 
-    // --- 6. FIFO_CONFIG_REG (0x08) = 0x5F ---
-    // Bit6: 1 (Sample Average = 4倍硬件平均)
-    // Bit5: 1 (使能)
-    // Bit4: 1 (FIFO Rollover 使能)
-    // Bit0-3: 1111 (FIFO_A_FULL = 15)
-    PPG_WriteOneByte(FIFO_CONFIG_REG, 0x5F);
+    // --- 6. FIFO_CONFIG_REG (0x08) ---
+    // [7:5]=SMP_AVE  [4]=ROLLOVER  [3:0]=A_FULL(15)
+    // 由 sample_rate_config.h 根据采样率自动选择硬件平均倍数
+    PPG_WriteOneByte(FIFO_CONFIG_REG, MAX30101_FIFO_CONFIG_VAL);
 
     // --- 7. 清除 FIFO 指针 ---
     PPG_WriteOneByte(FIFO_WR_PTR_REG, 0x00);
