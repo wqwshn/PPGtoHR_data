@@ -4,169 +4,178 @@ extern uint8_t ACC_XYZ[];
 extern uint8_t GYRO_XYZ[];
 extern uint8_t MAG_XYZ[];
 
-//MIMU ACC GYROµÄĞ´Èë
+/* â”€â”€ SPI å•å­—èŠ‚å†™å¯„å­˜å™¨ â”€â”€ */
 void ACC_GYRO_Write(uint8_t RegAddress, uint8_t txData){
 	uint8_t spiTxData[2] = {0};
 	uint8_t spiRxData[2] = {0};
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);	//Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);      //²»Ñ¡´Å
-	HAL_Delay(5);
-	
-	spiTxData[0] = RegAddress; 
-	spiTxData[1] = txData; 
-	
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);	
-	HAL_Delay(1);
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);  // é€‰ä¸­ACC/GYRO
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);        // å–æ¶ˆç£åŠ›è®¡
 
+	spiTxData[0] = RegAddress & 0x7F;  // bit7=0: å†™æ“ä½œ
+	spiTxData[1] = txData;
+
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);    // é‡Šæ”¾CS
 }
 
 
-//MIMU MAGµÄĞ´Èë
-void MAG_Write(uint8_t RegAddress, uint8_t txData){
-	uint8_t spiTxData[2] = {0};
-	uint8_t spiRxData[2] = {0};
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);      //Ñ¡´Å
-	
-	spiTxData[0] = RegAddress; 
-	spiTxData[1] = txData; 
-	
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);	
-	HAL_Delay(1);
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
-
-}
-
-
-//MIMU ACC GYROµÄ¼Ä´æÆ÷¶ÁÈ¡
+/* â”€â”€ SPI å•å­—èŠ‚è¯»å¯„å­˜å™¨ â”€â”€ */
 uint8_t ACC_GYRO_Read(uint8_t RegAddress){
 	uint8_t spiTxData[2] = {0};
 	uint8_t spiRxData[2] = {0};
-	//uint8_t ReadData = 0;
-	spiTxData[0] =  0x80|RegAddress;
-	
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);	//Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);      //²»Ñ¡´Å
-	HAL_Delay(5);
-	
+	spiTxData[0] = 0x80 | RegAddress;  // bit7=1: è¯»æ“ä½œ
+
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
+
 	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
-	HAL_Delay(1);
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	
-	
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
+
 	return spiRxData[1];
 }
 
 
-//MIMU magµÄ¼Ä´æÆ÷¶ÁÈ¡
+/* â”€â”€ MAG å†™å¯„å­˜å™¨ â”€â”€ */
+void MAG_Write(uint8_t RegAddress, uint8_t txData){
+	uint8_t spiTxData[2] = {0};
+	uint8_t spiRxData[2] = {0};
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);
+
+	spiTxData[0] = RegAddress & 0x7F;
+	spiTxData[1] = txData;
+
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
+}
+
+
+/* â”€â”€ MAG è¯»å¯„å­˜å™¨ â”€â”€ */
 uint8_t MAG_Read(uint8_t RegAddress){
 	uint8_t spiTxData[2] = {0};
 	uint8_t spiRxData[2] = {0};
-	spiTxData[0] =  0x80|RegAddress;
-	
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);      //Ñ¡´Å
-	HAL_Delay(5);
-	
+	spiTxData[0] = 0x80 | RegAddress;
+
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);
+
 	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
-	HAL_Delay(1);
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);   	
-	
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
+
 	return spiRxData[1];
 }
 
 
-//¼ÓËÙ¶È¶à×Ö½Ú¶ÁÈ¡  3Öá£¬Ã¿¸öÖá2bytesÊı¾İ
+/* â”€â”€ åŠ é€Ÿåº¦è®¡6å­—èŠ‚çªå‘è¯»å– (å°ç«¯åº, OUT_X_L_XL=0x28) â”€â”€ */
 void ACC_6BytesRead(void){
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);	//Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);      //²»Ñ¡´Å
-	
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
+
 	uint8_t spiTxData[7] = {0};
-	uint8_t spiRxData[7] = {0};    //
-	spiTxData[0] = 0x80|0x28;   //±íÊ¾¶ÁÈ¡RegAddress
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);   
-	
+	uint8_t spiRxData[7] = {0};
+	spiTxData[0] = 0x80 | 0x28;  // è¯» OUT_X_L_XL, IF_ADD_INC è‡ªåŠ¨é€’å¢
+
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);
+
 	for(uint8_t i = 0; i < 6; i++){
 		ACC_XYZ[i] = spiRxData[i+1];
-	}			
+	}
 
-	//HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	
-	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È ÕâÀï¿ÉÄÜºÍspiÓï¾ä¼ä¸ôÌ«¶Ì£¬ËùÒÔĞ´ÔÚÕâÀï²»ºÃ£¬·ÅÔÚÁËadc¿ªÊ¼×ª»»µÄÓï¾äÄÇÀï	
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);  // è¯»å–å®Œæ¯•é‡Šæ”¾CS
 }
 
 
-//gyro
+/* â”€â”€ é™€èºä»ª6å­—èŠ‚çªå‘è¯»å– (å°ç«¯åº, OUT_X_L_G=0x18) â”€â”€ */
 void GYRO_6BytesRead(void){
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);	//Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);      //²»Ñ¡´Å
-	
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
+
 	uint8_t spiTxData[7] = {0};
-	uint8_t spiRxData[7] = {0};    //
-	spiTxData[0] = 0x80|0x18;   //±íÊ¾¶ÁÈ¡RegAddress
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);   
-	
+	uint8_t spiRxData[7] = {0};
+	spiTxData[0] = 0x80 | 0x18;  // è¯» OUT_X_L_G, IF_ADD_INC è‡ªåŠ¨é€’å¢
+
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);
+
 	for(uint8_t i = 0; i < 6; i++){
 		GYRO_XYZ[i] = spiRxData[i+1];
-	}		
-	
-	//HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  	
+	}
+
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);  // è¯»å–å®Œæ¯•é‡Šæ”¾CS
 }
 
 
-//´Å¶à×Ö½Ú¶ÁÈ¡  3Öá£¬Ã¿¸öÖá2bytesÊı¾İ
+/* â”€â”€ ç£åŠ›è®¡6å­—èŠ‚çªå‘è¯»å– â”€â”€ */
 void MAG_6BytesRead(void){
-	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);	//²»Ñ¡¼ÓËÙ¶ÈºÍ½ÇËÙ¶È  
-	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);      //Ñ¡´Å
-	
+	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);
+
 	uint8_t spiTxData[7] = {0};
-	uint8_t spiRxData[7] = {0};    //
-	spiTxData[0] = 0xC0|0x28;   //±íÊ¾¶ÁÈ¡RegAddress
-		
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff); 
-	
-	for(uint8_t i = 0; i < 6; i++){     //Ö±½Ó¸³ÖµÌ«¿ìÁË£¬»áÏÔÊ¾¶¼ÊÇ0£¬²»´øDMA¾ÍĞĞÁË   ÕâÀïÊÇ6»¹ÊÇ7°¡
+	uint8_t spiRxData[7] = {0};
+	spiTxData[0] = 0xC0 | 0x28;  // è¯» OUT_X_L_M, åœ°å€é€’å¢
+
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);
+
+	for(uint8_t i = 0; i < 6; i++){
 		MAG_XYZ[i] = spiRxData[i+1];
 	}
-	
-	//HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);	
+
+	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
 }
 
 
-//MIMU initialize
-void MIMU_Init(){   // È«²¿Ã»Ğ´½øÈ¥
-	ACC_GYRO_Write(CTRL_REG6_XL,0xD6); //¼ÓËÙ¶È¼Ä´æÆ÷Ğ´CTRL_REG6_XL (20h),Êı¾İ¸üĞÂÂÊ952Hz£¬´ø¿í100Hz£¬¼ÓËÙ¶È·¶Î§+-4g
-	//ACC_GYRO_Write(CTRL_REG6_XL,0xCE); //¼ÓËÙ¶È¼Ä´æÆ÷Ğ´CTRL_REG6_XL (20h)£¬Êı¾İ¸üĞÂÂÊ952Hz£¬´ø¿í100Hz£¬¼ÓËÙ¶È·¶Î§+-16g  £¨DATASHEET P52£©	
-	ACC_GYRO_Write(CTRL_REG8,0x04); //¼ÓËÙ¶ÈÍÓÂİ¼Ä´æÆ÷Ğ´CTRL_REG8 (22h)£¬³ÖĞø¸üĞÂ..¶ÁÍêºóÔÙ¸üĞÂÊı¾İ 0x44³ÖĞø¸üĞÂ
-	ACC_GYRO_Write(CTRL_REG9,0x04); //¼ÓËÙ¶ÈÍÓÂİ¼Ä´æÆ÷Ğ´CTRL_REG9 (23h)£¬½ûÓÃI2C 0x04    
-	
-	ACC_GYRO_Write(CTRL_REG1_G,0xC8); //ÍÓÂİ¼Ä´æÆ÷Ğ´CTRL_REG1_G (10h),Êı¾İ¸üĞÂÂÊ952Hz£¬Á¿³Ì500 dps£¬LPF1´ø¿í100Hz
-	//ACC_GYRO_Write(CTRL_REG1_G,0xD8); //ÍÓÂİ¼Ä´æÆ÷Ğ´CTRL_REG1_G (10h),Êı¾İ¸üĞÂÂÊ952Hz£¬LPF1´ø¿í100Hz£¬Á¿³Ì2000 dps
-	
-	MAG_Write(CTRL_REG1_M,0xFC); //´Å¼Ä´æÆ÷Ğ´CTRL_REG1_M (20h)£¬´ÅÎÂ²¹£¬XYÖá´ÅUHPÄ£Ê½£¬ODR=80Hz
-	MAG_Write(CTRL_REG2_M,0x00); //´Å¼Ä´æÆ÷Ğ´CTRL_REG2_M (21h)£¬Á¿³Ì+-4gauss
-	MAG_Write(CTRL_REG3_M,0x80); //´Å¼Ä´æÆ÷Ğ´CTRL_REG3_M (22h)£¬½ûÓÃI2C¡¢SPI¶ÁĞ´¹¦ÄÜ£¬Á¬Ğø×ª»»Ä£Ê½
-	MAG_Write(CTRL_REG4_M,0x0C); //´Å¼Ä´æÆ÷Ğ´CTRL_REG4_M (23h)£¬ZÖá´ÅUHPÄ£Ê½
-	MAG_Write(CTRL_REG5_M,0x00); //´Å¼Ä´æÆ÷Ğ´CTRL_REG5_M (24h)£¬³ÖĞø¸üĞÂÄ£Ê½¡£Êı¾İ¶Á³öºóÔÙ¸üĞÂ
+/*
+ * MIMU åˆå§‹åŒ–
+ *
+ * åˆå§‹åŒ–æµç¨‹ (å‚è€ƒ LSM9DS1.md):
+ *   1. è½¯å¤ä½ CTRL_REG8=0x05, å»¶æ—¶20ms
+ *   2. å¯ç”¨ BDU + IF_ADD_INC: CTRL_REG8=0x44
+ *   3. å…³é—­ FIFO å’Œç¡¬ä»¶ä¸­æ–­
+ *   4. é…ç½®é™€èºä»ª: 119Hz, Â±500dps, BW=14Hz, é«˜é€šæ»¤æ³¢
+ *   5. é…ç½®åŠ é€Ÿåº¦è®¡: 119Hz, Â±4g, é«˜åˆ†è¾¨ç‡, æ•°å­—æ»¤æ³¢
+ *   6. é…ç½®ç£åŠ›è®¡
+ */
+void MIMU_Init(void){
+	/* Step-1: è½¯å¤ä½ + IF_ADD_INC, ç­‰å¾…å¯„å­˜å™¨é‡è£…å®Œæˆ */
+	ACC_GYRO_Write(CTRL_REG8, 0x05);   // SW_RESET=1 + IF_ADD_INC=1
+	HAL_Delay(20);
+
+	/* Step-2: BDU(é˜²æ’•è£‚) + IF_ADD_INC(çªå‘è¯»å–åœ°å€é€’å¢) */
+	ACC_GYRO_Write(CTRL_REG8, 0x44);   // BDU=1 + IF_ADD_INC=1
+
+	/* Step-3: å…³é—­ FIFO å’Œç¡¬ä»¶ä¸­æ–­ */
+	ACC_GYRO_Write(CTRL_REG9, 0x04);   // ç¦ç”¨FIFO, ç¦ç”¨I2C
+
+	/* Step-4: é™€èºä»ªé…ç½®
+	 * CTRL_REG1_G=0x68: ODR=119Hz, FS=Â±500dps, BW=14Hz
+	 * CTRL_REG3_G=0x46: HP_EN=1, HPCF=0b0110 (çº¦0.1Hzæˆªæ­¢)
+	 */
+	ACC_GYRO_Write(CTRL_REG1_G, 0x68);
+	ACC_GYRO_Write(CTRL_REG3_G, 0x46);  // å¼€å¯é«˜é€šæ»¤æ³¢æ¶ˆé™¤é›¶åæ¼‚ç§»
+
+	/* Step-5: åŠ é€Ÿåº¦è®¡é…ç½®
+	 * CTRL_REG6_XL=0x70: ODR=119Hz, FS=Â±4g, è‡ªåŠ¨å¸¦å®½
+	 * CTRL_REG7_XL=0xC4: é«˜åˆ†è¾¨ç‡, æ•°å­—æ»¤æ³¢ODR/9, æ»¤æ³¢åè¾“å‡º
+	 */
+	ACC_GYRO_Write(CTRL_REG6_XL, 0x70);
+	ACC_GYRO_Write(CTRL_REG7_XL, 0xC4);
+
+	/* Step-6: ç£åŠ›è®¡é…ç½® (ä¿æŒåŸæœ‰é…ç½®ä¸å˜) */
+	MAG_Write(CTRL_REG1_M, 0xFC);  // ç£æ¸©è¡¥, XYè½´UHPæ¨¡å¼, ODR=80Hz
+	MAG_Write(CTRL_REG2_M, 0x00);  // é‡ç¨‹Â±4gauss
+	MAG_Write(CTRL_REG3_M, 0x80);  // ç¦ç”¨I2C, SPIè¯»å†™, è¿ç»­è½¬æ¢æ¨¡å¼
+	MAG_Write(CTRL_REG4_M, 0x0C);  // Zè½´UHPæ¨¡å¼
+	MAG_Write(CTRL_REG5_M, 0x00);  // è¿ç»­è½¬æ¢æ¨¡å¼
 }
 
 
-//MIMUÁ¬½ÓÊÇ·ñÕı³£¼ì²é
+/* â”€â”€ MIMU è¿æ¥æ£€æŸ¥ â”€â”€ */
 uint8_t MIMU_check(void){
 	uint8_t mimu_id[2] = {0};
 	mimu_id[0] = ACC_GYRO_Read(WHO_AM_I);
 	mimu_id[1] = MAG_Read(WHO_AM_I_M);
-	
-//	
-//	mimu_id[0] = ACC_GYRO_Read(0x1E);
-//	mimu_id[1] = ACC_GYRO_Read(0x1F);
-//	HAL_UART_Transmit_DMA(&huart2, mimu_id, 2);   
-	
-	
-	
-	if((mimu_id[0] == 0x68) & (mimu_id[1] == 0x3D))
+
+	if((mimu_id[0] == 0x68) && (mimu_id[1] == 0x3D))
 		return 1;
 	else
 		return 0;
 }
-

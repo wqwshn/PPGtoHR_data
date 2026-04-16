@@ -223,8 +223,8 @@ def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
     acc_y = _decode_int16((data[12] << 8) | data[13]) * RANGE_ACC
     acc_z = _decode_int16((data[14] << 8) | data[15]) * RANGE_ACC
 
-    # GYRO (int16 BE, +-2000dps 量程)
-    RANGE_GYRO = 2000.0 / 32767.0
+    # GYRO (int16 BE, ±500dps 灵敏度 17.50 mdps/LSB, 与固件 CTRL_REG1_G=0x68 一致)
+    RANGE_GYRO = 17.50 / 1000.0   # dps/LSB
     gyro_x = _decode_int16((data[16] << 8) | data[17]) * RANGE_GYRO
     gyro_y = _decode_int16((data[18] << 8) | data[19]) * RANGE_GYRO
     gyro_z = _decode_int16((data[20] << 8) | data[21]) * RANGE_GYRO
