@@ -191,6 +191,13 @@ class RawDataPanel(QWidget):
 
         layout.addStretch()
 
+        self._lbl_calib = QLabel("")
+        self._lbl_calib.setStyleSheet(
+            f"color: {COLOR_GREEN}; font-size: 12px; font-weight: bold;"
+        )
+        self._lbl_calib.setVisible(False)
+        layout.addWidget(self._lbl_calib)
+
         self._lbl_count = QLabel("Packets: 0")
         self._lbl_count.setStyleSheet(
             f"color: {COLOR_TEXT_DIM}; font-size: 12px;"
@@ -254,6 +261,24 @@ class RawDataPanel(QWidget):
             f"{t.get('mode', 'Mode')}: Multi-LED (G+R+IR)"
         )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: {self._packet_count}")
+
+    def handle_calib_status(self, text: str):
+        """处理固件发送的标定状态文本"""
+        self._lbl_calib.setVisible(True)
+        self._lbl_calib.setText(text)
+        # 根据内容切换颜色
+        if "OK" in text or "saved" in text:
+            self._lbl_calib.setStyleSheet(
+                f"color: {COLOR_GREEN}; font-size: 12px; font-weight: bold;"
+            )
+        elif "REJECTED" in text:
+            self._lbl_calib.setStyleSheet(
+                f"color: {COLOR_RED}; font-size: 12px; font-weight: bold;"
+            )
+        else:
+            self._lbl_calib.setStyleSheet(
+                f"color: {COLOR_ORANGE}; font-size: 12px; font-weight: bold;"
+            )
 
     def _update_plots(self):
         """50ms 定时刷新波形"""
@@ -366,12 +391,13 @@ class RawDataPanel(QWidget):
         ):
             curve.setData([])
 
-        # 重置信息条
+        # 重置信息条 (含标定标签)
         t = TRANSLATIONS[self._lang]
         self._lbl_mode.setText(f"{t.get('mode', 'Mode')}: --")
         self._lbl_rate.setText(f"{t.get('sample_rate', 'Rate')}: 0 Hz")
         self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00%")
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
+        self._lbl_calib.setVisible(False)
 
     # ── 语言切换 ─────────────────────────────────────────
 

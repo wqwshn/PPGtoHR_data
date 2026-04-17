@@ -28,6 +28,8 @@ class SerialReader(QThread):
     hr_packet_received = pyqtSignal(HRPacket)
     # 信号: 原始传感器包 (125Hz)
     raw_packet_received = pyqtSignal(RawDataPacket)
+    # 信号: 陀螺仪标定状态文本
+    calib_status_received = pyqtSignal(str)
     # 信号: 错误信息
     error_occurred = pyqtSignal(str)
     # 信号: 连接状态变化
@@ -67,6 +69,8 @@ class SerialReader(QThread):
         state = 0
         buf = bytearray()
         expected_len = 0
+        # ASCII 文本行缓冲 (用于标定状态等调试文本)
+        text_buf = bytearray()
 
         try:
             while self._running:
@@ -80,6 +84,18 @@ class SerialReader(QThread):
                         if byte == HEADER_BYTE_0:  # 0xAA
                             buf = bytearray([byte])
                             state = 1
+                        elif 0x20 <= byte <= 0x7E or byte in (0x0D, 0x0A):
+                            # 可打印 ASCII 或换行: 收集文本行
+                            if byte == 0x0A:
+                                line = text_buf.decode("ascii", errors="ignore").strip()
+                                if line:
+                                    self.calib_status_received.emit(line)
+                                text_buf.clear()
+                            elif byte != 0x0D:
+                                if len(text_buf) < 256:
+                                    text_buf.append(byte)
+                        else:
+                            text_buf.clear()
                     elif state == 1:
                         if byte == HEADER_BYTE_1:  # 0xCC -> HR 结果包
                             buf.append(byte)
