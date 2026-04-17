@@ -33,6 +33,9 @@ void GYRO_6BytesRead(void); // 陀螺仪多字节读取
 void MAG_6BytesRead(void);  // 磁力计多字节读取
 
 void MIMU_Init(void);       // MIMU 初始化
+void MIMU_GyroCalibrate(void); // 陀螺仪零偏标定
 uint8_t MIMU_check(void);   // MIMU 连接检查
+
+extern int16_t gyro_offset[3]; // 陀螺仪零偏 (LSB)
 
 #endif

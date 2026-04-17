@@ -221,6 +221,9 @@ int main(void)
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Init OK\r\n", 21, 1000);
   HAL_Delay(200);
 
+  /* 2.1 陀螺仪零偏标定 (静态采集) */
+  MIMU_GyroCalibrate();
+
   /* 3. MAX30101 初始化 (通过通道接口) */
   HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before MAX30101_Init\r\n", 28, 1000);
   PPG_Init();
@@ -385,13 +388,18 @@ int main(void)
       allData[14] = ACC_XYZ[5];  /* Z_H */
       allData[15] = ACC_XYZ[4];  /* Z_L */
 
-      /* --- 2.5 打包 GYRO 完整 16 位 --- */
-      allData[GYRO_START_INDEX]     = GYRO_XYZ[1];  /* GX_H */
-      allData[GYRO_START_INDEX + 1] = GYRO_XYZ[0];  /* GX_L */
-      allData[GYRO_START_INDEX + 2] = GYRO_XYZ[3];  /* GY_H */
-      allData[GYRO_START_INDEX + 3] = GYRO_XYZ[2];  /* GY_L */
-      allData[GYRO_START_INDEX + 4] = GYRO_XYZ[5];  /* GZ_H */
-      allData[GYRO_START_INDEX + 5] = GYRO_XYZ[4];  /* GZ_L */
+      /* --- 2.5 打包 GYRO 完整 16 位 (扣除零偏) --- */
+      {
+          int16_t gx = (int16_t)((GYRO_XYZ[1] << 8) | GYRO_XYZ[0]) - gyro_offset[0];
+          int16_t gy = (int16_t)((GYRO_XYZ[3] << 8) | GYRO_XYZ[2]) - gyro_offset[1];
+          int16_t gz = (int16_t)((GYRO_XYZ[5] << 8) | GYRO_XYZ[4]) - gyro_offset[2];
+          allData[GYRO_START_INDEX]     = (uint8_t)(gx >> 8);
+          allData[GYRO_START_INDEX + 1] = (uint8_t)(gx & 0xFF);
+          allData[GYRO_START_INDEX + 2] = (uint8_t)(gy >> 8);
+          allData[GYRO_START_INDEX + 3] = (uint8_t)(gy & 0xFF);
+          allData[GYRO_START_INDEX + 4] = (uint8_t)(gz >> 8);
+          allData[GYRO_START_INDEX + 5] = (uint8_t)(gz & 0xFF);
+      }
 
       /* --- 3. PPG 数据采集 --- */
       uint8_t wr_ptr = PPG_ReadOneByte(FIFO_WR_PTR_REG);

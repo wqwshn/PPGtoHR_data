@@ -168,6 +168,29 @@ void MIMU_Init(void){
 }
 
 
+/* ── 陀螺仪零偏标定 (静态采集N个样本取均值) ── */
+int16_t gyro_offset[3] = {0, 0, 0};
+
+void MIMU_GyroCalibrate(void){
+	int32_t sum_x = 0, sum_y = 0, sum_z = 0;
+	const int N = 200;  // 200个样本 ~2秒
+
+	HAL_Delay(500);  // 等待传感器稳定
+
+	for(int i = 0; i < N; i++){
+		GYRO_6BytesRead();
+		sum_x += (int16_t)((GYRO_XYZ[1] << 8) | GYRO_XYZ[0]);
+		sum_y += (int16_t)((GYRO_XYZ[3] << 8) | GYRO_XYZ[2]);
+		sum_z += (int16_t)((GYRO_XYZ[5] << 8) | GYRO_XYZ[4]);
+		HAL_Delay(10);  // 100Hz, 略低于ODR 119Hz
+	}
+
+	gyro_offset[0] = (int16_t)(sum_x / N);
+	gyro_offset[1] = (int16_t)(sum_y / N);
+	gyro_offset[2] = (int16_t)(sum_z / N);
+}
+
+
 /* ── MIMU 连接检查 ── */
 uint8_t MIMU_check(void){
 	uint8_t mimu_id[2] = {0};
