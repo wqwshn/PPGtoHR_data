@@ -221,7 +221,10 @@ int main(void)
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Init OK\r\n", 21, 1000);
   HAL_Delay(200);
 
-  /* 2.1 陀螺仪零偏标定 (静态采集) */
+  /* 2.1 从 Flash 加载历史陀螺仪零偏 (若无则默认0) */
+  MIMU_LoadGyroOffset();
+
+  /* 2.2 陀螺仪零偏标定 (暖机+800样本+std校验+Flash存储) */
   MIMU_GyroCalibrate();
 
   /* 3. MAX30101 初始化 (通过通道接口) */

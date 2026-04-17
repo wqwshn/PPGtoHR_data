@@ -1,4 +1,8 @@
 #include "MIMU.h"
+#include "stm32l4xx_hal.h"
+#include <string.h>
+#include <stdio.h>
+#include <math.h>
 
 extern uint8_t ACC_XYZ[];
 extern uint8_t GYRO_XYZ[];
@@ -168,26 +172,157 @@ void MIMU_Init(void){
 }
 
 
-/* ── 陀螺仪零偏标定 (静态采集N个样本取均值) ── */
+/* ── 陀螺仪零偏标定 (暖机丢弃 + 800样本 + std校验 + Flash存储) ── */
 int16_t gyro_offset[3] = {0, 0, 0};
 
-void MIMU_GyroCalibrate(void){
+/* Flash 存储: 使用最后一页 (512KB Flash 的 page 255) */
+#define CALIB_FLASH_PAGE_ADDR  0x0807F800U
+#define CALIB_MAGIC            0xAA55CC77U
+
+/* Flash 数据结构: magic(4) + offset[3](6) + reserved(1) + xor(1) = 12 bytes */
+typedef struct __attribute__((packed)) {
+	uint32_t magic;
+	int16_t  offset[3];
+	uint8_t  reserved;
+	uint8_t  xor_check;
+} GyroCalibFlash_t;
+
+static uint8_t _calc_calib_xor(const GyroCalibFlash_t *d) {
+	const uint8_t *p = (const uint8_t *)d;
+	uint8_t x = 0;
+	for (int i = 0; i < (int)sizeof(GyroCalibFlash_t) - 1; i++)
+		x ^= p[i];
+	return x;
+}
+
+void MIMU_LoadGyroOffset(void) {
+	const GyroCalibFlash_t *flash = (const GyroCalibFlash_t *)CALIB_FLASH_PAGE_ADDR;
+	if (flash->magic == CALIB_MAGIC && _calc_calib_xor(flash) == flash->xor_check) {
+		memcpy(gyro_offset, flash->offset, sizeof(gyro_offset));
+	}
+}
+
+static void _save_gyro_offset_to_flash(void) {
+	GyroCalibFlash_t data = {
+		.magic = CALIB_MAGIC,
+		.reserved = 0xFF,
+	};
+	memcpy(data.offset, gyro_offset, sizeof(gyro_offset));
+	data.xor_check = _calc_calib_xor(&data);
+
+	HAL_FLASH_Unlock();
+	FLASH_EraseInitTypeDef erase = {
+		.TypeErase = FLASH_TYPEERASE_PAGES,
+		.Banks     = FLASH_BANK_1,
+		.Page      = (CALIB_FLASH_PAGE_ADDR - 0x08000000U) / 2048U,
+		.NbPages   = 1,
+	};
+	uint32_t err = 0;
+	HAL_FLASHEx_Erase(&erase, &err);
+
+	const uint64_t *src = (const uint64_t *)&data;
+	for (int i = 0; i < 2; i++) {
+		HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD,
+		                  CALIB_FLASH_PAGE_ADDR + i * 8, src[i]);
+	}
+	HAL_FLASH_Lock();
+}
+
+/* 标定过程中通过 UART 输出进度 (需 extern huart2) */
+extern UART_HandleTypeDef huart2;
+
+static void _calib_print(const char *msg) {
+	HAL_UART_Transmit(&huart2, (uint8_t *)msg, strlen(msg), 100);
+}
+
+#define CALIB_WARMUP   200   // 暖机丢弃样本数 (~2s)
+#define CALIB_SAMPLES  800   // 有效采集样本数 (~8s)
+#define CALIB_STD_MAX  3.0f  // 标准差阈值 (dps), 超过则拒绝本次标定
+
+void MIMU_GyroCalibrate(void) {
+	char buf[64];
 	int32_t sum_x = 0, sum_y = 0, sum_z = 0;
-	const int N = 200;  // 200个样本 ~2秒
 
-	HAL_Delay(500);  // 等待传感器稳定
+	_calib_print("GYRO CALIB: warming up...\r\n");
+	HAL_Delay(500);
 
-	for(int i = 0; i < N; i++){
+	/* 阶段1: 暖机丢弃 */
+	for (int i = 0; i < CALIB_WARMUP; i++) {
+		GYRO_6BytesRead();
+		HAL_Delay(10);
+	}
+
+	_calib_print("GYRO CALIB: collecting...\r\n");
+
+	/* 阶段2: 有效采集 */
+	for (int i = 0; i < CALIB_SAMPLES; i++) {
 		GYRO_6BytesRead();
 		sum_x += (int16_t)((GYRO_XYZ[1] << 8) | GYRO_XYZ[0]);
 		sum_y += (int16_t)((GYRO_XYZ[3] << 8) | GYRO_XYZ[2]);
 		sum_z += (int16_t)((GYRO_XYZ[5] << 8) | GYRO_XYZ[4]);
-		HAL_Delay(10);  // 100Hz, 略低于ODR 119Hz
+		HAL_Delay(10);
+
+		/* 每200样本输出一次进度 */
+		if ((i + 1) % 200 == 0) {
+			snprintf(buf, sizeof(buf),
+			         "  %d/%d mean: X=%d Y=%d Z=%d\r\n",
+			         i + 1, CALIB_SAMPLES,
+			         (int)(sum_x / (i + 1)), (int)(sum_y / (i + 1)), (int)(sum_z / (i + 1)));
+			_calib_print(buf);
+		}
 	}
 
-	gyro_offset[0] = (int16_t)(sum_x / N);
-	gyro_offset[1] = (int16_t)(sum_y / N);
-	gyro_offset[2] = (int16_t)(sum_z / N);
+	int16_t ox = (int16_t)(sum_x / CALIB_SAMPLES);
+	int16_t oy = (int16_t)(sum_y / CALIB_SAMPLES);
+	int16_t oz = (int16_t)(sum_z / CALIB_SAMPLES);
+
+	/* 阶段3: 标准差校验 (二次遍历计算方差) */
+	/* 需要重新采集一遍算方差 -- 用最近采集的偏差估计 */
+	/* 简化: 使用均值和最后若干样本的偏差估计 */
+	/* 更精确: 再采集100个样本算标准差 */
+	_calib_print("GYRO CALIB: validating...\r\n");
+	int32_t var_x = 0, var_y = 0, var_z = 0;
+	int n_std = 200;
+	for (int i = 0; i < n_std; i++) {
+		GYRO_6BytesRead();
+		int16_t gx = (int16_t)((GYRO_XYZ[1] << 8) | GYRO_XYZ[0]);
+		int16_t gy = (int16_t)((GYRO_XYZ[3] << 8) | GYRO_XYZ[2]);
+		int16_t gz = (int16_t)((GYRO_XYZ[5] << 8) | GYRO_XYZ[4]);
+		int32_t dx = gx - ox, dy = gy - oy, dz = gz - oz;
+		var_x += dx * dx;
+		var_y += dy * dy;
+		var_z += dz * dz;
+		HAL_Delay(10);
+	}
+	/* 标准差 (dps), 灵敏度 17.50 mdps/LSB */
+	float std_x = sqrtf((float)var_x / n_std) * 17.50f / 1000.0f;
+	float std_y = sqrtf((float)var_y / n_std) * 17.50f / 1000.0f;
+	float std_z = sqrtf((float)var_z / n_std) * 17.50f / 1000.0f;
+	float std_max = std_x > std_y ? std_x : std_y;
+	if (std_max < std_z) std_max = std_z;
+
+	snprintf(buf, sizeof(buf),
+	         "  std: X=%.2f Y=%.2f Z=%.2f dps (threshold=%.1f)\r\n",
+	         std_x, std_y, std_z, CALIB_STD_MAX);
+	_calib_print(buf);
+
+	if (std_max > CALIB_STD_MAX) {
+		snprintf(buf, sizeof(buf),
+		         "GYRO CALIB: REJECTED (std too high, keeping flash default)\r\n");
+		_calib_print(buf);
+		return;
+	}
+
+	/* 阶段4: 更新零偏并写入 Flash */
+	gyro_offset[0] = ox;
+	gyro_offset[1] = oy;
+	gyro_offset[2] = oz;
+	_save_gyro_offset_to_flash();
+
+	snprintf(buf, sizeof(buf),
+	         "GYRO CALIB: OK  X=%d Y=%d Z=%d (saved to flash)\r\n",
+	         ox, oy, oz);
+	_calib_print(buf);
 }
 
 
