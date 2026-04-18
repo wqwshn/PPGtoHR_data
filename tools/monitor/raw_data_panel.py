@@ -17,7 +17,6 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QFileDialog,
 )
 import pyqtgraph as pg
 
@@ -67,13 +66,14 @@ class RawDataPanel(QWidget):
         self._csv_file = None
         self._csv_writer = None
         self._recording_start_time: Optional[float] = None
+        self._flush_counter = 0
 
         self._init_ui()
 
-        # 波形刷新定时器 (50ms = 20FPS)
+        # 波形刷新定时器 (66ms = 15FPS)
         self._plot_timer = QTimer(self)
         self._plot_timer.timeout.connect(self._update_plots)
-        self._plot_timer.start(50)
+        self._plot_timer.start(66)
 
         # 采样率计算定时器 (1s)
         self._rate_timer = QTimer(self)
@@ -214,6 +214,8 @@ class RawDataPanel(QWidget):
         pw.getAxis("left").setPen(pg.mkPen(COLOR_TEXT_DIM))
         pw.getAxis("bottom").setPen(pg.mkPen(COLOR_TEXT_DIM))
         pw.setBackground(COLOR_CARD)
+        pw.setClipToView(True)
+        pw.setDownsampling(auto=True)
         curve = pw.plot(pen=pg.mkPen(color, width=1.5))
         return pw, curve
 
@@ -250,7 +252,10 @@ class RawDataPanel(QWidget):
                 round(pkt.gyro_x, 3), round(pkt.gyro_y, 3), round(pkt.gyro_z, 3),
                 pkt.ppg_green, pkt.ppg_red, pkt.ppg_ir,
             ])
-            self._csv_file.flush()
+            self._flush_counter += 1
+            if self._flush_counter >= 100:
+                self._csv_file.flush()
+                self._flush_counter = 0
 
         # 更新信息条
         self._update_info_bar(pkt)
@@ -314,24 +319,18 @@ class RawDataPanel(QWidget):
 
     # ── 录制 ─────────────────────────────────────────────
 
-    def _toggle_record(self) -> bool:
+    def _toggle_record(self, save_dir: Path = None) -> bool:
         """
         切换录制状态.
         Returns: True=正在录制, False=停止录制
         """
-        t = TRANSLATIONS[self._lang]
         if not self._is_recording:
-            desktop = Path.home() / "Desktop"
-            if not desktop.exists():
-                desktop = Path.home()
-            default_name = str(
-                desktop / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            if save_dir is None:
+                save_dir = Path.home() / "Desktop"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            path = str(
+                save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
-            path, _ = QFileDialog.getSaveFileName(
-                self, t["select_save_path"], default_name, "CSV Files (*.csv)"
-            )
-            if not path:
-                return False
             self._csv_file = open(path, "w", newline="", encoding="utf-8-sig")
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow([
@@ -343,6 +342,7 @@ class RawDataPanel(QWidget):
             ])
             self._recording_start_time = time.time()
             self._is_recording = True
+            self._flush_counter = 0
             return True
         else:
             self._stop_recording()

@@ -75,7 +75,7 @@ class SerialReader(QThread):
         try:
             while self._running:
                 # 非阻塞读取, 增大缓冲区以适应 125Hz 吞吐
-                raw = self._serial.read(128)
+                raw = self._serial.read(4096)
                 if not raw:
                     continue
 

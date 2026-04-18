@@ -312,6 +312,11 @@ class MonitorWindow(QMainWindow):
         self.setMinimumSize(1000, 700)
         self.resize(1200, 750)
 
+        # 默认保存目录
+        self._save_dir = Path.home() / "Desktop"
+        if not self._save_dir.exists():
+            self._save_dir = Path.home()
+
         # 创建子面板
         self._hr_panel = HRPanel(self)
         self._raw_panel = self._create_raw_panel()
@@ -421,6 +426,21 @@ class MonitorWindow(QMainWindow):
         self._btn_clear.clicked.connect(self._clear_active_panel)
         layout.addWidget(self._btn_clear)
 
+        # 保存路径
+        self._btn_save_path = QPushButton(self._save_dir.name)
+        self._btn_save_path.setFixedWidth(80)
+        self._btn_save_path.setToolTip(str(self._save_dir))
+        self._btn_save_path.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_CARD}; color: {COLOR_TEXT_DIM};
+                border: 1px solid {COLOR_CARD_BORDER}; border-radius: 4px;
+                padding: 6px 8px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background-color: #2A3A4E; }}
+        """)
+        self._btn_save_path.clicked.connect(self._browse_save_dir)
+        layout.addWidget(self._btn_save_path)
+
         # 录制
         self._btn_record = QPushButton(t["record"])
         self._btn_record.setObjectName("btn_record")
@@ -491,6 +511,17 @@ class MonitorWindow(QMainWindow):
                 QPushButton:hover {{ background-color: #DC2626; }}
             """)
 
+    def _browse_save_dir(self):
+        """浏览选择保存目录"""
+        t = TRANSLATIONS[self._lang]
+        path = QFileDialog.getExistingDirectory(
+            self, t["select_save_path"], str(self._save_dir)
+        )
+        if path:
+            self._save_dir = Path(path)
+            self._btn_save_path.setText(self._save_dir.name)
+            self._btn_save_path.setToolTip(str(self._save_dir))
+
     # ── 公共接口 ─────────────────────────────────────────
 
     def refresh_ports(self):
@@ -537,9 +568,9 @@ class MonitorWindow(QMainWindow):
     def _toggle_record_active(self):
         idx = self._panel_stack.currentIndex()
         if idx == 0:
-            self._hr_panel._toggle_record()
+            self._hr_panel._toggle_record(self._save_dir)
         else:
-            self._raw_panel._toggle_record()
+            self._raw_panel._toggle_record(self._save_dir)
         self._update_record_button()
 
     def _toggle_language(self):
@@ -890,21 +921,15 @@ class HRPanel(QWidget):
 
     # ── 录制 ─────────────────────────────────────────────
 
-    def _toggle_record(self):
+    def _toggle_record(self, save_dir: Path = None):
         t = TRANSLATIONS[self._lang]
         if not self._is_recording:
-            desktop = Path.home() / "Desktop"
-            if not desktop.exists():
-                desktop = Path.home()
-            default_name = str(
-                desktop / f"hr_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            if save_dir is None:
+                save_dir = Path.home() / "Desktop"
+            save_dir.mkdir(parents=True, exist_ok=True)
+            self._record_file_path = str(
+                save_dir / f"hr_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
-            path, _ = QFileDialog.getSaveFileName(
-                None, t["select_save_path"], default_name, "CSV Files (*.csv)"
-            )
-            if not path:
-                return
-            self._record_file_path = path
             self._recorded_data.clear()
             self._recording_start = None
             self._is_recording = True
