@@ -157,11 +157,13 @@ void MIMU_Init(void){
 	ACC_GYRO_Write(CTRL_REG3_G, 0x46);  // 开启高通滤波消除零偏漂移
 
 	/* Step-5: 加速度计配置
-	 * CTRL_REG6_XL=0x70: ODR=119Hz, FS=±4g, 自动带宽
-	 * CTRL_REG7_XL=0xC4: 高分辨率, 数字滤波ODR/9, 滤波后输出
+	 * CTRL_REG6_XL=0x73: ODR=119Hz, FS=±4g, BW_XL=11(50Hz防混叠)
+	 * CTRL_REG7_XL=0xC4: HR=1高分辨率, DCF=ODR/9(13.2Hz), FDS=1滤波输出
+	 * 注: HR和FDS必须同时启用, 仅设FDS=1会导致ACC输出趋零
 	 */
-	ACC_GYRO_Write(CTRL_REG6_XL, 0x70);
-	ACC_GYRO_Write(CTRL_REG7_XL, 0x00);  // FDS=1会导致ACC输出趋零
+	ACC_GYRO_Write(CTRL_REG6_XL, 0x73);  // ODR=119Hz, +-4g, BW_XL=11(50Hz防混叠)
+	ACC_GYRO_Write(CTRL_REG7_XL, 0xC4);  // HR=1, DCF=ODR/9(13.2Hz), FDS=1(滤波输出)
+	// 注: HR和FDS必须同时启用, 仅设FDS=1而不设HR=1会导致ACC输出趋零
 
 	/* Step-6: 磁力计配置 (保持原有配置不变) */
 	MAG_Write(CTRL_REG1_M, 0xFC);  // 磁温补, XY轴UHP模式, ODR=80Hz
