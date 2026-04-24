@@ -9,7 +9,7 @@
 
 基于 PyQt5 + pyqtgraph 构建的暗色主题统一监测上位机，通过串口/蓝牙接收 STM32 单片机数据，支持两种工作面板:
 - **在线心率面板**: 1Hz 心率结果包 (31字节, 0xAA 0xCC)，实时展示融合心率、三路径对比、趋势曲线
-- **原始数据面板**: 100Hz 原始传感器包 (33字节, 0xAA 0xBB)，实时展示 PPG 波形、热膜桥压、加速度计、陀螺仪
+- **原始数据面板**: 100Hz 原始传感器包 (35字节, 0xAA 0xBB)，实时展示 PPG 波形、热膜桥压、加速度计、陀螺仪和链路质量
 
 ### 1.1 运行方式
 
@@ -107,6 +107,9 @@ python tools/monitor/main.py --raw-simulate
 - 时间列采用相对时间 (从录制开始的第一个数据包计，单位秒，精度毫秒)
 - 再次点击按钮停止录制，数据自动写入之前选择的 CSV 文件
 - 原始数据面板录制: 逐包实时写入 CSV，每 100 包刷盘一次 (避免 GUI 线程阻塞导致丢包)
+- 原始数据面板 `Time(s)` 按 100Hz 样本序号生成，不再使用 UI 主线程处理时间，避免串口/绘图批处理导致时间戳跳变
+- 原始数据面板 CSV 新增 `Seq` 和 `MissingBefore`: `Seq` 为固件侧 Raw 采样序号, `MissingBefore` 为该包前由序号缺口推断的缺失样本数
+- 串口读取线程采用 0.01s timeout + 最多 4 个 Raw 包的小块读取，避免 4096 字节读取造成约 124 包批量进入 UI
 
 ### 3.2 CSV 格式
 
@@ -172,7 +175,34 @@ CSV 列定义:
 20    帧尾                uint8       0xCC
 ```
 
-### 5.2 原始传感器包 (33 字节, 100Hz, 帧头 0xAA 0xBB)
+### 5.2 原始传感器包 (35 字节, 100Hz, 帧头 0xAA 0xBB)
+
+当前 Raw 包格式如下。该格式自 2026-04-24 起用于链路质量评估，旧 21/33 字节格式仅作为历史记录保留在变更记录中。
+
+```
+偏移   字段                类型        说明
+0-1    帧头                uint8 x2    0xAA, 0xBB
+2-3    桥顶2 (HF2)         uint16 BE   ADS124S06 24bit高16bit
+4-5    桥顶1 (HF1)         uint16 BE   ADS124S06 24bit高16bit
+6-7    桥中2               uint16 BE   ADS124S06 24bit高16bit
+8-9    桥中1               uint16 BE   ADS124S06 24bit高16bit
+10-15  ACC X/Y/Z           int16 BE    LSM9DS1完整16bit, X/Y/Z
+16-21  GYRO X/Y/Z          int16 BE    LSM9DS1完整16bit, X/Y/Z
+22-24  PPG Green           3 bytes     17-bit原始值
+25-27  PPG Red             3 bytes     17-bit原始值
+28-30  PPG IR              3 bytes     17-bit原始值
+31-32  Seq                 uint16 BE   固件侧Raw采样序号, 0xFFFF后回绕
+33     XOR 校验             uint8       bytes[2..32] 异或
+34     帧尾                uint8       0xCC
+```
+
+链路质量评估:
+- `RX Hz`: PC 端每秒解析成功的 Raw 包数。
+- `DEV Hz`: 按 `Seq` 推断的设备侧 Raw 采样周期数, 正常应接近 100Hz。
+- `Loss`: `missing_count / expected_count`, 其中 `missing_count` 来自 `Seq` 缺口。
+- `MissingBefore`: CSV 中每个包前的缺失样本数。例如序号 11 后直接收到 15, 则序号 15 行的 `MissingBefore=3`。
+
+历史旧格式摘录如下，当前版本不再使用:
 
 ```
 偏移  字段                类型        说明
@@ -202,7 +232,7 @@ SpO2 模式: bytes[13-14]=16bit红光均值, bytes[15-16]=16bit红外均值
 1. 等待帧头 0xAA
 2. 等待第二帧头字节区分协议:
    - 0xCC -> 31字节 HR 结果包 -> `parse_hr_packet()` -> `HRPacket`
-   - 0xBB -> 21字节 原始传感器包 -> `parse_raw_packet()` -> `RawDataPacket`
+   - 0xBB -> 35字节 原始传感器包 -> `parse_raw_packet()` -> `RawDataPacket`
 3. 收集 payload 直到满对应长度
 4. XOR 校验 + 帧尾验证
 5. 通过不同的 pyqtSignal 发射给对应面板
@@ -216,7 +246,7 @@ tools/monitor/
   main.py              # 程序入口, AppController 连接 MonitorWindow 和 SerialReader
   dashboard.py         # MonitorWindow(外壳+工具栏) + HRPanel(在线心率面板) + 翻译表/配色
   raw_data_panel.py    # RawDataPanel(原始数据面板) - PPG/ACC/桥压/SpO2 波形
-  protocol.py          # HRPacket(31字节) + RawDataPacket(21字节) 协议定义与解析
+  protocol.py          # HRPacket(31字节) + RawDataPacket(35字节) 协议定义与解析
   serial_reader.py     # 双协议串口读取线程 (QThread + 状态机)
   requirements.txt     # Python 依赖
   start_monitor.bat    # Windows 一键启动脚本
@@ -239,8 +269,10 @@ tools/monitor/
 | 2026-04-15 | 多光谱原始数据包支持(33字节): 新增 RawDataPacket 解析(Green+Red+IR三通道PPG + 16-bit ACC + 陀螺仪); 串口双包类型自动检测(0xAA0xBB/0xAA0xCC); PPG波形固定三通道布局(左侧绿光, 右侧红光+红外上下); 新增陀螺仪角速度波形; 移除HR/SpO2模式切换; tools/monitor/ 协议/串口/面板同步更新 |
 | 2026-04-18 | UI优化: 1)录制按钮旁新增保存路径设置(默认桌面, 点击录制直接开始无需选路径); 2)修复数据录制丢包(移除逐包flush改为每100包刷盘, 串口读取缓冲区从128字节增至4096); 3)绘图性能优化(启用pyqtgraph裁剪视图+自动降采样, 刷新频率从20FPS降至15FPS) |
 | 2026-04-18 | 绘图流畅度优化: 缓冲区翻倍至2000点, 可见窗口缩减为800点(8秒), 每帧渲染量-20%; 刷新率提升至30FPS(33ms); 信息条从逐包(100Hz)降频为按帧率(30FPS)更新, 消除冗余QLabel重绘 |
+| 2026-04-24 | 原始数据录制缺点排查修复: 串口读取由 4096 字节大块读取改为低延迟小块读取; Raw CSV 时间列改为按 100Hz 样本序号生成，消除批处理造成的时间戳跳变和点击录制尾部时延 |
+| 2026-04-24 | Raw链路质量评估: 原始数据包扩展为35字节, 新增固件侧 `Seq`; 上位机显示 `RX Hz/DEV Hz/Loss`, CSV新增 `Seq` 与 `MissingBefore` |
 
 ---
 
-**最后更新**: 2026-04-18
+**最后更新**: 2026-04-24
 **对应分支**: main

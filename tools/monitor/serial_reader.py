@@ -4,7 +4,7 @@ PPG Monitor - 串口读取线程
 在独立 QThread 中运行串口读取, 使用状态机逐字节解析帧.
 支持双协议:
   - 31 字节心率结果包 (0xAA 0xCC) -> hr_packet_received
-  - 33 字节多光谱原始传感器包 (0xAA 0xBB) -> raw_packet_received
+  - 35 字节多光谱原始传感器包 (0xAA 0xBB) -> raw_packet_received
 """
 from __future__ import annotations
 
@@ -19,6 +19,16 @@ from protocol import (
     parse_hr_packet, HRPacket,
     parse_raw_packet, RawDataPacket,
 )
+
+SERIAL_READ_TIMEOUT_S = 0.01
+SERIAL_READ_CHUNK_BYTES = RAW_PACKET_LEN * 4
+
+
+def read_serial_chunk(serial_port) -> bytes:
+    """Read a small buffered chunk so 100Hz packets are delivered with low latency."""
+    waiting = getattr(serial_port, "in_waiting", 0)
+    read_size = min(max(waiting, 1), SERIAL_READ_CHUNK_BYTES)
+    return serial_port.read(read_size)
 
 
 class SerialReader(QThread):
@@ -54,7 +64,7 @@ class SerialReader(QThread):
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=0.1,
+                timeout=SERIAL_READ_TIMEOUT_S,
             )
             self._running = True
             self._raw_total = 0
@@ -74,8 +84,8 @@ class SerialReader(QThread):
 
         try:
             while self._running:
-                # 非阻塞读取, 增大缓冲区以适应 100Hz 吞吐
-                raw = self._serial.read(4096)
+                # 小块低延迟读取, 避免4096字节约124个原始包批量进入UI线程.
+                raw = read_serial_chunk(self._serial)
                 if not raw:
                     continue
 
@@ -103,7 +113,7 @@ class SerialReader(QThread):
                             state = 2
                         elif byte == RAW_HEADER_BYTE_1:  # 0xBB -> 原始数据包
                             buf.append(byte)
-                            expected_len = RAW_PACKET_LEN  # 33
+                            expected_len = RAW_PACKET_LEN  # 35
                             state = 2
                         elif byte == HEADER_BYTE_0:
                             # 连续 0xAA, 重新开始

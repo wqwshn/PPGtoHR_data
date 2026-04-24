@@ -40,8 +40,8 @@
 /* 注意: 所有系统配置开关 (工作模式/数据发送/PPG通道/采样率)
  *       已统一移至 main.h 的 USER CODE 区域, 请在该文件修改 */
 
-// PPG 和 GYRO 偏移已在 main.h 中统一定义
-// PPG_START_INDEX = 22, GYRO_START_INDEX = 16
+// PPG / GYRO / Raw序号偏移已在 main.h 中统一定义
+// PPG_START_INDEX = 22, GYRO_START_INDEX = 16, RAW_SEQUENCE_START_INDEX = 31
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -68,6 +68,7 @@ uint8_t DOUT[4] = {0, 0, 0, 0};
 
 /* 发送缓冲区 */
 uint8_t allData[50] = {0};
+static uint16_t raw_packet_seq = 0;
 
 /* ADC 相关 */
 uint8_t Utop_times1 = 0;
@@ -526,18 +527,23 @@ int main(void)
 #endif /* !ENABLE_RAW_DATA_PACKET */
 #endif
 
-      /* --- 4. 校验位 (bytes[2..30], 共29字节) --- */
-      allData[31] = CheckXOR(&allData[2], XOR_CHECK_LEN);
+      /* --- 4. Raw采样序号 (bytes[31..32], 固件侧采样周期) --- */
+      allData[RAW_SEQUENCE_START_INDEX] = (uint8_t)(raw_packet_seq >> 8);
+      allData[RAW_SEQUENCE_START_INDEX + 1] = (uint8_t)(raw_packet_seq & 0xFF);
 
-      /* --- 5. 帧尾 --- */
-      allData[32] = 0xCC;
+      /* --- 5. 校验位 (bytes[2..32], 共31字节) --- */
+      allData[33] = CheckXOR(&allData[2], XOR_CHECK_LEN);
 
-      /* --- 6. DMA 发送 (33 字节) --- */
+      /* --- 6. 帧尾 --- */
+      allData[34] = 0xCC;
+
+      /* --- 7. DMA 发送 (35 字节) --- */
 #if (ENABLE_RAW_DATA_PACKET)
-      HAL_UART_Transmit_DMA(&huart2, allData, PACKET_LEN);
+      (void)HAL_UART_Transmit_DMA(&huart2, allData, PACKET_LEN);
+      raw_packet_seq++;
 #endif
 
-      /* --- 7. 清除标志位 --- */
+      /* --- 8. 清除标志位 --- */
       ADC_1to4Voltage_flag = 0;
     }
 

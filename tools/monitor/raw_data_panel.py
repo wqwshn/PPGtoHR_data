@@ -1,7 +1,7 @@
 """
 PPG Monitor - 原始传感器数据可视化面板
 
-暗色主题实时波形面板, 接收 33 字节多光谱原始传感器数据包 (100Hz),
+暗色主题实时波形面板, 接收 35 字节多光谱原始传感器数据包 (100Hz),
 展示 PPG 三通道波形 (Green/Red/IR) / 热膜桥压 / 三轴加速度 / 陀螺仪角速度.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
 import pyqtgraph as pg
 
 from protocol import RawDataPacket
+from raw_quality import RawQualityStats
 
 # 复用 dashboard 的配色常量
 from dashboard import (
@@ -34,6 +35,35 @@ from dashboard import (
 PLOT_BUFFER = 2000
 # 可见窗口大小 (实际绘制点数)
 VISIBLE_POINTS = 800
+RAW_RECORD_SAMPLE_RATE_HZ = 100.0
+RAW_CSV_HEADER = [
+    "Time(s)", "Seq", "MissingBefore",
+    "Uc1(mV)", "Uc2(mV)", "Ut1(mV)", "Ut2(mV)",
+    "AccX(g)", "AccY(g)", "AccZ(g)",
+    "GyroX(dps)", "GyroY(dps)", "GyroZ(dps)",
+    "PPG_Green", "PPG_Red", "PPG_IR",
+]
+
+
+def sample_index_to_elapsed_seconds(
+    sample_index: int,
+    sample_rate_hz: float = RAW_RECORD_SAMPLE_RATE_HZ,
+) -> float:
+    """Return deterministic sample time for fixed-rate raw recording."""
+    return round(sample_index / sample_rate_hz, 3)
+
+
+def raw_packet_to_csv_row(pkt: RawDataPacket, elapsed: float, missing_before: int) -> list:
+    return [
+        elapsed,
+        pkt.sequence,
+        missing_before,
+        round(pkt.Uc1, 5), round(pkt.Uc2, 5),
+        round(pkt.Ut1, 5), round(pkt.Ut2, 5),
+        round(pkt.acc_x, 5), round(pkt.acc_y, 5), round(pkt.acc_z, 5),
+        round(pkt.gyro_x, 3), round(pkt.gyro_y, 3), round(pkt.gyro_z, 3),
+        pkt.ppg_green, pkt.ppg_red, pkt.ppg_ir,
+    ]
 
 
 class RawDataPanel(QWidget):
@@ -62,6 +92,11 @@ class RawDataPanel(QWidget):
         self._packet_count = 0
         self._sample_count = 0  # 每秒重置, 用于采样率计算
         self._start_time = time.time()
+        self._quality = RawQualityStats()
+        self._last_missing_before = 0
+        self._last_rx_hz = 0
+        self._last_device_hz = 0
+        self._last_expected_count = 0
 
         # 信息条最新包缓存 (按帧率更新, 不逐包刷新)
         self._last_pkt: Optional[RawDataPacket] = None
@@ -71,6 +106,7 @@ class RawDataPanel(QWidget):
         self._csv_file = None
         self._csv_writer = None
         self._recording_start_time: Optional[float] = None
+        self._recorded_sample_count = 0
         self._flush_counter = 0
 
         self._init_ui()
@@ -182,13 +218,13 @@ class RawDataPanel(QWidget):
         )
         layout.addWidget(self._lbl_mode)
 
-        self._lbl_rate = QLabel("Rate: 0 Hz")
+        self._lbl_rate = QLabel("Rate: RX 0 Hz | DEV 0 Hz")
         self._lbl_rate.setStyleSheet(
             f"color: {COLOR_ORANGE}; font-size: 13px; font-weight: bold;"
         )
         layout.addWidget(self._lbl_rate)
 
-        self._lbl_loss = QLabel("Loss: 0.00%")
+        self._lbl_loss = QLabel("Loss: 0.00% (0/0)")
         self._lbl_loss.setStyleSheet(
             f"color: {COLOR_RED}; font-size: 13px; font-weight: bold;"
         )
@@ -224,10 +260,20 @@ class RawDataPanel(QWidget):
 
     # ── 数据处理 ─────────────────────────────────────────
 
+    def _reset_quality_stats(self):
+        self._quality.reset()
+        self._last_missing_before = 0
+        self._last_rx_hz = 0
+        self._last_device_hz = 0
+        self._last_expected_count = 0
+        self._sample_count = 0
+
     def handle_raw_data(self, pkt: RawDataPacket):
         """接收并缓存一个多光谱原始数据包"""
         self._sample_count += 1
         self._packet_count += 1
+        missing_before = self._quality.observe(pkt.sequence)
+        self._last_missing_before = missing_before
 
         # 追加数据缓冲区
         self._data_Uc1.append(pkt.Uc1)
@@ -246,15 +292,9 @@ class RawDataPanel(QWidget):
 
         # CSV 实时写入
         if self._is_recording and self._csv_writer:
-            elapsed = round(time.time() - self._recording_start_time, 3)
-            self._csv_writer.writerow([
-                elapsed,
-                round(pkt.Uc1, 5), round(pkt.Uc2, 5),
-                round(pkt.Ut1, 5), round(pkt.Ut2, 5),
-                round(pkt.acc_x, 5), round(pkt.acc_y, 5), round(pkt.acc_z, 5),
-                round(pkt.gyro_x, 3), round(pkt.gyro_y, 3), round(pkt.gyro_z, 3),
-                pkt.ppg_green, pkt.ppg_red, pkt.ppg_ir,
-            ])
+            elapsed = sample_index_to_elapsed_seconds(self._recorded_sample_count)
+            self._csv_writer.writerow(raw_packet_to_csv_row(pkt, elapsed, missing_before))
+            self._recorded_sample_count += 1
             self._flush_counter += 1
             if self._flush_counter >= 100:
                 self._csv_file.flush()
@@ -268,7 +308,13 @@ class RawDataPanel(QWidget):
         self._lbl_mode.setText(
             f"{t.get('mode', 'Mode')}: Multi-LED (G+R+IR)"
         )
-        self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: {self._packet_count}")
+        self._lbl_loss.setText(
+            f"{t.get('packet_loss', 'Loss')}: {self._quality.loss_rate * 100:.2f}% "
+            f"({self._quality.missing_count}/{self._quality.expected_count})"
+        )
+        self._lbl_count.setText(
+            f"{t.get('pkt_count', 'Packets')}: {self._quality.received_count}"
+        )
 
     def handle_calib_status(self, text: str):
         """处理固件发送的标定状态文本"""
@@ -321,7 +367,14 @@ class RawDataPanel(QWidget):
     def _update_sample_rate(self):
         """1秒定时器: 刷新采样率"""
         t = TRANSLATIONS[self._lang]
-        self._lbl_rate.setText(f"{t.get('sample_rate', 'Rate')}: {self._sample_count} Hz")
+        current_expected = self._quality.expected_count
+        self._last_rx_hz = self._sample_count
+        self._last_device_hz = max(0, current_expected - self._last_expected_count)
+        self._last_expected_count = current_expected
+        self._lbl_rate.setText(
+            f"{t.get('sample_rate', 'Rate')}: "
+            f"RX {self._last_rx_hz} Hz | DEV {self._last_device_hz} Hz"
+        )
         self._sample_count = 0
 
     # ── 录制 ─────────────────────────────────────────────
@@ -340,14 +393,10 @@ class RawDataPanel(QWidget):
             )
             self._csv_file = open(path, "w", newline="", encoding="utf-8-sig")
             self._csv_writer = csv.writer(self._csv_file)
-            self._csv_writer.writerow([
-                "Time(s)",
-                "Uc1(mV)", "Uc2(mV)", "Ut1(mV)", "Ut2(mV)",
-                "AccX(g)", "AccY(g)", "AccZ(g)",
-                "GyroX(dps)", "GyroY(dps)", "GyroZ(dps)",
-                "PPG_Green", "PPG_Red", "PPG_IR",
-            ])
+            self._csv_writer.writerow(RAW_CSV_HEADER)
             self._recording_start_time = time.time()
+            self._recorded_sample_count = 0
+            self._reset_quality_stats()
             self._is_recording = True
             self._flush_counter = 0
             return True
@@ -359,10 +408,12 @@ class RawDataPanel(QWidget):
         """停止录制并关闭文件"""
         self._is_recording = False
         if self._csv_file:
+            self._csv_file.flush()
             self._csv_file.close()
             self._csv_file = None
             self._csv_writer = None
         self._recording_start_time = None
+        self._recorded_sample_count = 0
 
     @property
     def is_recording(self) -> bool:
@@ -381,8 +432,8 @@ class RawDataPanel(QWidget):
             d.clear()
 
         self._packet_count = 0
-        self._sample_count = 0
         self._start_time = time.time()
+        self._reset_quality_stats()
 
         # 停止录制
         if self._is_recording:
@@ -401,8 +452,8 @@ class RawDataPanel(QWidget):
         # 重置信息条 (含标定标签)
         t = TRANSLATIONS[self._lang]
         self._lbl_mode.setText(f"{t.get('mode', 'Mode')}: --")
-        self._lbl_rate.setText(f"{t.get('sample_rate', 'Rate')}: 0 Hz")
-        self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00%")
+        self._lbl_rate.setText(f"{t.get('sample_rate', 'Rate')}: RX 0 Hz | DEV 0 Hz")
+        self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00% (0/0)")
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
         self._lbl_calib.setVisible(False)
 
@@ -413,8 +464,14 @@ class RawDataPanel(QWidget):
         self._lang = lang
         t = TRANSLATIONS[lang]
         self._lbl_mode.setText(f"{t.get('mode', 'Mode')}: --")
-        self._lbl_rate.setText(f"{t.get('sample_rate', 'Rate')}: -- Hz")
-        self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: --")
+        self._lbl_rate.setText(
+            f"{t.get('sample_rate', 'Rate')}: "
+            f"RX {self._last_rx_hz} Hz | DEV {self._last_device_hz} Hz"
+        )
+        self._lbl_loss.setText(
+            f"{t.get('packet_loss', 'Loss')}: {self._quality.loss_rate * 100:.2f}% "
+            f"({self._quality.missing_count}/{self._quality.expected_count})"
+        )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
 
         # 更新图表标题
@@ -481,5 +538,6 @@ class RawDataPanel(QWidget):
             ppg_green=int(base + pulse + noise) & 0x01FFFF,
             ppg_red=int(base * 0.8 + pulse * 0.6 + noise * 0.8) & 0x01FFFF,
             ppg_ir=int(base * 0.7 + pulse * 0.5 + noise * 0.7) & 0x01FFFF,
+            sequence=self._sim_step & 0xFFFF,
         )
         self.handle_raw_data(pkt)

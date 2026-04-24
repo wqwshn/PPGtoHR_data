@@ -25,7 +25,7 @@ L452CEU6_ALL_Cmake/
 │   ├── main.py                       # 入口 (双协议串口/模拟模式)
 │   ├── dashboard.py                  # MonitorWindow + HRPanel + 翻译/配色
 │   ├── raw_data_panel.py             # RawDataPanel (PPG/桥压/ACC/GYRO 波形)
-│   ├── protocol.py                   # 双协议定义 (31字节HR + 33字节Raw)
+│   ├── protocol.py                   # 双协议定义 (31字节HR + 35字节Raw)
 │   ├── serial_reader.py              # 双协议串口读取线程 (QThread)
 │   ├── requirements.txt              # Python 依赖
 │   └── start_monitor.bat             # Windows 快速启动
@@ -114,7 +114,7 @@ L452CEU6_ALL_Cmake/
 
 双协议帧格式，串口状态机自动识别 (帧头 0xAA + 第二字节区分类型)。
 
-### 原始传感器包 (33 字节 @ 100Hz, 帧头 0xAA 0xBB)
+### 原始传感器包 (35 字节 @ 100Hz, 帧头 0xAA 0xBB)
 
 | 偏移 | 字段 | 类型 | 描述 |
 |------|------|------|------|
@@ -125,8 +125,9 @@ L452CEU6_ALL_Cmake/
 | 22-24 | PPG Green | 3 bytes | 绿光 17-bit 原始 ADC 值 |
 | 25-27 | PPG Red | 3 bytes | 红光 17-bit 原始 ADC 值 |
 | 28-30 | PPG IR | 3 bytes | 红外 17-bit 原始 ADC 值 |
-| 31 | XOR Checksum | uint8 | bytes[2..30] 异或 |
-| 32 | Footer | uint8 | 0xCC |
+| 31-32 | Seq | uint16 BE | 固件侧Raw采样序号, 0xFFFF后回绕 |
+| 33 | XOR Checksum | uint8 | bytes[2..32] 异或 |
+| 34 | Footer | uint8 | 0xCC |
 
 ### 心率结果包 (31 字节 @ 1Hz, 帧头 0xAA 0xCC)
 
@@ -267,7 +268,7 @@ python main.py --raw-simulate
     |
     +-- 100Hz 数据就绪?
     |   +-- 推送采样到算法缓冲区
-    |   +-- DMA 发送 33 字节多光谱原始数据包
+    |   +-- DMA 发送 35 字节多光谱原始数据包 (含Raw采样序号)
     |
     +-- 1Hz 算法就绪?
         +-- HR_RunSolver() 14 步流水线
@@ -309,6 +310,7 @@ python main.py --raw-simulate
 
 - **2026-03** 在线心率算法集成: 三路融合 (LMS-HF, LMS-ACC, FFT), 1Hz HR 输出, PyQt5 上位机
 - **2026-03** 多传感器数据采集 + 蓝牙通讯; 心率/血氧双模式支持; 温度补偿功能
-- **2026-04** 多光谱原始数据包扩展 (33 字节): 三通道 PPG (Green/Red/IR) + 完整 16-bit ACC + 三轴陀螺仪
+- **2026-04** 多光谱原始数据包扩展 (35 字节): 三通道 PPG (Green/Red/IR) + 完整 16-bit ACC + 三轴陀螺仪 + Raw采样序号
+- **2026-04** Raw链路质量评估: 上位机显示 RX Hz / DEV Hz / Loss, CSV导出 Seq 与 MissingBefore
 - **2026-04** 统一上位机: HR 面板 + 原始数据面板双面板切换; 信号质量字段 (HF1/HF2 AC 幅值 + 相关系数)
 - **2026-04** 采样率适配 100Hz; 录制功能优化 (默认桌面保存, 每 100 包刷盘修复丢包); 绘图性能优化 (30FPS, 缓冲区翻倍, 视野裁剪)

@@ -3,7 +3,7 @@ PPG Monitor - 协议定义与帧解析
 
 支持两种数据包格式:
   1) 31 字节心率结果包 (1Hz, 0xAA 0xCC 帧头)
-  2) 33 字节原始传感器包 (100Hz, 0xAA 0xBB 帧头)
+  2) 35 字节原始传感器包 (100Hz, 0xAA 0xBB 帧头)
 
 === 31 字节心率结果包 ===
   偏移  字段                类型        说明
@@ -27,7 +27,7 @@ PPG Monitor - 协议定义与帧解析
   29    XOR 校验             uint8       bytes[2..28] 异或
   30    帧尾                uint8       0xCC
 
-=== 33 字节多光谱原始传感器包 ===
+=== 35 字节多光谱原始传感器包 ===
   偏移  字段                类型        说明
   0-1   帧头                uint8 x2    0xAA, 0xBB
   2-3   桥顶2 (HF2)         uint16 BE   24bit高16bit, 8bit
@@ -39,8 +39,9 @@ PPG Monitor - 协议定义与帧解析
   22-24 PPG Green           3 bytes     17-bit 原始ADC值
   25-27 PPG Red             3 bytes     17-bit 原始ADC值
   28-30 PPG IR              3 bytes     17-bit 原始ADC值
-  31    XOR 校验             uint8       bytes[2..30] 异或
-  32    帧尾                uint8       0xCC
+  31-32 Seq                 uint16 BE   Raw采样序号
+  33    XOR 校验             uint8       bytes[2..32] 异或
+  34    帧尾                uint8       0xCC
 """
 
 from __future__ import annotations
@@ -58,14 +59,14 @@ PAYLOAD_END = 29     # XOR 校验前一字节 (含)
 XOR_START = 2        # XOR 计算起始偏移
 XOR_END = 28         # XOR 计算结束偏移 (含)
 
-# 33 字节多光谱原始传感器帧常量
+# 35 字节多光谱原始传感器帧常量
 RAW_HEADER_BYTE_0 = 0xAA
 RAW_HEADER_BYTE_1 = 0xBB
 RAW_FOOTER_BYTE = 0xCC
-RAW_PACKET_LEN = 33
+RAW_PACKET_LEN = 35
 RAW_XOR_START = 2    # XOR 计算起始偏移
-RAW_XOR_END = 30     # XOR 计算结束偏移 (含)
-RAW_XOR_POS = 31     # XOR 校验值位置
+RAW_XOR_END = 32     # XOR 计算结束偏移 (含)
+RAW_XOR_POS = 33     # XOR 校验值位置
 
 
 @dataclass
@@ -159,11 +160,11 @@ def parse_hr_packet(data: bytes) -> Optional[HRPacket]:
     )
 
 
-# ── 33 字节多光谱原始传感器包 ──────────────────────────────
+# ── 35 字节多光谱原始传感器包 ──────────────────────────────
 
 @dataclass
 class RawDataPacket:
-    """解析后的 33 字节多光谱原始传感器数据包"""
+    """解析后的 35 字节多光谱原始传感器数据包"""
     Ut2: float            # 热膜桥顶2 电压 (mV)
     Ut1: float            # 热膜桥顶1 电压 (mV)
     Uc2: float            # 热膜桥中2 电压 (mV)
@@ -177,14 +178,15 @@ class RawDataPacket:
     ppg_green: float      # 绿光 PPG 17-bit 原始值
     ppg_red: float        # 红光 PPG 17-bit 原始值
     ppg_ir: float         # 红外 PPG 17-bit 原始值
+    sequence: int         # Raw 采样序号 (uint16, 固件侧采样周期)
 
 
 def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
     """
-    解析 33 字节多光谱原始传感器数据包.
+    解析 35 字节多光谱原始传感器数据包.
 
     Args:
-        data: 完整的 33 字节原始帧
+        data: 完整的 35 字节原始帧
 
     Returns:
         RawDataPacket 解析成功, None 校验失败
@@ -197,10 +199,10 @@ def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
         return None
 
     # 校验帧尾
-    if data[32] != RAW_FOOTER_BYTE:
+    if data[34] != RAW_FOOTER_BYTE:
         return None
 
-    # XOR 校验: bytes[2..30] 异或 == data[31]
+    # XOR 校验: bytes[2..32] 异或 == data[33]
     xor_val = 0
     for i in range(RAW_XOR_START, RAW_XOR_END + 1):
         xor_val ^= data[i]
@@ -233,10 +235,12 @@ def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
     ppg_green = ((data[22] << 16) | (data[23] << 8) | data[24]) & 0x01FFFF
     ppg_red   = ((data[25] << 16) | (data[26] << 8) | data[27]) & 0x01FFFF
     ppg_ir    = ((data[28] << 16) | (data[29] << 8) | data[30]) & 0x01FFFF
+    sequence = (data[31] << 8) | data[32]
 
     return RawDataPacket(
         Ut2=Ut2, Ut1=Ut1, Uc2=Uc2, Uc1=Uc1,
         acc_x=acc_x, acc_y=acc_y, acc_z=acc_z,
         gyro_x=gyro_x, gyro_y=gyro_y, gyro_z=gyro_z,
         ppg_green=ppg_green, ppg_red=ppg_red, ppg_ir=ppg_ir,
+        sequence=sequence,
     )
