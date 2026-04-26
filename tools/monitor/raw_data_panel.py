@@ -22,6 +22,7 @@ import pyqtgraph as pg
 
 from protocol import RawDataPacket
 from raw_quality import RawQualityStats
+from realtime_hr import timed_estimate_green_fft_hr
 
 # 复用 dashboard 的配色常量
 from dashboard import (
@@ -97,6 +98,7 @@ class RawDataPanel(QWidget):
         self._last_rx_hz = 0
         self._last_device_hz = 0
         self._last_expected_count = 0
+        self._last_hr_calc_ms: Optional[float] = None
 
         # 信息条最新包缓存 (按帧率更新, 不逐包刷新)
         self._last_pkt: Optional[RawDataPacket] = None
@@ -120,6 +122,12 @@ class RawDataPanel(QWidget):
         self._rate_timer = QTimer(self)
         self._rate_timer.timeout.connect(self._update_sample_rate)
         self._rate_timer.start(1000)
+
+        # 1Hz 轻量绿光 PPG FFT 估计。只读取现有显示缓冲区，
+        # 不进入串口解析和 CSV 逐包写入路径。
+        self._hr_timer = QTimer(self)
+        self._hr_timer.timeout.connect(self._update_realtime_hr)
+        self._hr_timer.start(1000)
 
         # 模拟定时器
         self._sim_timer = QTimer(self)
@@ -229,6 +237,12 @@ class RawDataPanel(QWidget):
             f"color: {COLOR_RED}; font-size: 13px; font-weight: bold;"
         )
         layout.addWidget(self._lbl_loss)
+
+        self._lbl_realtime_hr = QLabel("实时心率: --")
+        self._lbl_realtime_hr.setStyleSheet(
+            f"color: {COLOR_TEXT_DIM}; font-size: 13px; font-weight: bold;"
+        )
+        layout.addWidget(self._lbl_realtime_hr)
 
         layout.addStretch()
 
@@ -379,6 +393,35 @@ class RawDataPanel(QWidget):
 
     # ── 录制 ─────────────────────────────────────────────
 
+    def _update_realtime_hr(self):
+        """每秒从绿光 PPG 估计一次心率，不触碰 IO 路径。"""
+        t = TRANSLATIONS[self._lang]
+        estimate = timed_estimate_green_fft_hr(list(self._data_ppg_g))
+        self._last_hr_calc_ms = estimate.elapsed_ms
+        calc_text = f"{t.get('hr_calc', 'Calc')} {estimate.elapsed_ms:.3f} ms"
+        if estimate.ready and estimate.bpm is not None:
+            self._lbl_realtime_hr.setText(
+                f"{t.get('realtime_hr', 'Realtime HR')}: {estimate.bpm:.1f} BPM | "
+                f"{estimate.window_seconds:.0f}s | {calc_text}"
+            )
+            self._lbl_realtime_hr.setStyleSheet(
+                f"color: {COLOR_GREEN}; font-size: 13px; font-weight: bold;"
+            )
+            return
+
+        if estimate.status == "filling":
+            status = f"{t.get('hr_filling', 'Filling')} {estimate.window_seconds:.0f}s"
+            color = COLOR_TEXT_DIM
+        else:
+            status = t.get("hr_weak", "Weak signal")
+            color = COLOR_ORANGE
+        self._lbl_realtime_hr.setText(
+            f"{t.get('realtime_hr', 'Realtime HR')}: -- ({status}) | {calc_text}"
+        )
+        self._lbl_realtime_hr.setStyleSheet(
+            f"color: {color}; font-size: 13px; font-weight: bold;"
+        )
+
     def _toggle_record(self, save_dir: Path = None) -> bool:
         """
         切换录制状态.
@@ -454,6 +497,10 @@ class RawDataPanel(QWidget):
         self._lbl_mode.setText(f"{t.get('mode', 'Mode')}: --")
         self._lbl_rate.setText(f"{t.get('sample_rate', 'Rate')}: RX 0 Hz | DEV 0 Hz")
         self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00% (0/0)")
+        self._lbl_realtime_hr.setText(f"{t.get('realtime_hr', 'Realtime HR')}: --")
+        self._lbl_realtime_hr.setStyleSheet(
+            f"color: {COLOR_TEXT_DIM}; font-size: 13px; font-weight: bold;"
+        )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
         self._lbl_calib.setVisible(False)
 
@@ -472,6 +519,7 @@ class RawDataPanel(QWidget):
             f"{t.get('packet_loss', 'Loss')}: {self._quality.loss_rate * 100:.2f}% "
             f"({self._quality.missing_count}/{self._quality.expected_count})"
         )
+        self._lbl_realtime_hr.setText(f"{t.get('realtime_hr', 'Realtime HR')}: --")
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
 
         # 更新图表标题

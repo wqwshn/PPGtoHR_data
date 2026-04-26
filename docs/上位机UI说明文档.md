@@ -91,6 +91,8 @@ python tools/monitor/main.py --raw-simulate
 
 波形以 33ms (30FPS) 定时刷新，缓冲区 2000 点，可见窗口 800 点 (8 秒)。信息条按帧率更新而非逐包刷新。
 
+原始数据面板顶部信息条新增 `实时心率/Realtime HR`: 每 1 秒从绿光 PPG 缓冲区取最近 8 秒数据执行轻量纯 FFT 估计，仅用于静息采集时快速判断佩戴位置与绿光信号是否可解算。该计算不进入串口读取线程，也不在逐包 CSV 写入路径中执行；界面同步显示单次计算耗时 `Calc xx ms`，便于观察算法开销。
+
 ### 2.6 状态栏
 
 显示: 数据包计数 | 运行时间 | [录制数据点数(仅录制时)] | PPG 均值 | 校准进度
@@ -246,6 +248,7 @@ tools/monitor/
   main.py              # 程序入口, AppController 连接 MonitorWindow 和 SerialReader
   dashboard.py         # MonitorWindow(外壳+工具栏) + HRPanel(在线心率面板) + 翻译表/配色
   raw_data_panel.py    # RawDataPanel(原始数据面板) - PPG/ACC/桥压/SpO2 波形
+  realtime_hr.py       # 原始数据面板绿光PPG实时纯FFT心率估计
   protocol.py          # HRPacket(31字节) + RawDataPacket(35字节) 协议定义与解析
   serial_reader.py     # 双协议串口读取线程 (QThread + 状态机)
   requirements.txt     # Python 依赖
@@ -271,8 +274,9 @@ tools/monitor/
 | 2026-04-18 | 绘图流畅度优化: 缓冲区翻倍至2000点, 可见窗口缩减为800点(8秒), 每帧渲染量-20%; 刷新率提升至30FPS(33ms); 信息条从逐包(100Hz)降频为按帧率(30FPS)更新, 消除冗余QLabel重绘 |
 | 2026-04-24 | 原始数据录制缺点排查修复: 串口读取由 4096 字节大块读取改为低延迟小块读取; Raw CSV 时间列改为按 100Hz 样本序号生成，消除批处理造成的时间戳跳变和点击录制尾部时延 |
 | 2026-04-24 | Raw链路质量评估: 原始数据包扩展为35字节, 新增固件侧 `Seq`; 上位机显示 `RX Hz/DEV Hz/Loss`, CSV新增 `Seq` 与 `MissingBefore` |
+| 2026-04-26 | 原始数据面板新增绿光 PPG 实时纯 FFT 心率估计: 8 秒窗口、1Hz 更新、显示计算耗时; 计算从已有缓冲读取，不影响串口解析和 Raw CSV 逐包保存链路 |
 
 ---
 
-**最后更新**: 2026-04-24
+**最后更新**: 2026-04-26
 **对应分支**: main
