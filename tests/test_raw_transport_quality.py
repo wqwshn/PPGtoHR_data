@@ -137,16 +137,95 @@ def test_raw_quality_stats_store_status_snapshot_and_pc_gap():
     stats = RawQualityStats()
     stats.observe(10)
     stats.observe(12)
-    status = protocol.parse_status_packet(
-        make_status_packet(tx_done_counter=5, tx_start_counter=6)
+    first = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=2, tx_start_counter=2)
     )
+    assert first is not None
+    stats.observe_status(first)
 
+    status = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=6, tx_start_counter=7)
+    )
     assert status is not None
     snapshot = stats.observe_status(status)
 
     assert stats.latest_status is status
-    assert snapshot.pc_missing_after_tx_done == 3
+    assert snapshot.pc_missing_after_tx_done == 4
     assert snapshot.tx_inflight == 1
+
+
+def test_raw_quality_stats_baseline_status_counters_at_first_snapshot():
+    stats = RawQualityStats()
+    stats.observe(10)
+    stats.observe(11)
+    first = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=3861, tx_start_counter=3861)
+    )
+    assert first is not None
+
+    first_snapshot = stats.observe_status(first)
+
+    assert first_snapshot.pc_missing_after_tx_done == 0
+    assert first_snapshot.tx_inflight == 0
+
+    for seq in range(12, 111):
+        stats.observe(seq)
+    second = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=3960, tx_start_counter=3960)
+    )
+    assert second is not None
+
+    second_snapshot = stats.observe_status(second)
+
+    assert second_snapshot.pc_missing_after_tx_done == 0
+
+
+def test_raw_quality_stats_reports_pc_gap_from_status_baseline_delta():
+    stats = RawQualityStats()
+    stats.observe(10)
+    first = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=1000, tx_start_counter=1000)
+    )
+    assert first is not None
+    stats.observe_status(first)
+
+    for seq in range(11, 81):
+        stats.observe(seq)
+    second = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=1100, tx_start_counter=1100)
+    )
+    assert second is not None
+
+    snapshot = stats.observe_status(second)
+
+    assert snapshot.pc_missing_after_tx_done == 30
+
+
+def test_raw_quality_stats_include_parser_stats_in_status_snapshot():
+    stats = RawQualityStats()
+    stats.observe_parser_stats(raw_total=120, raw_invalid=3)
+    status = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=1000, tx_start_counter=1000)
+    )
+    assert status is not None
+
+    first_snapshot = stats.observe_status(status)
+
+    assert first_snapshot.pc_raw_total_candidates == 120
+    assert first_snapshot.pc_raw_invalid_candidates == 3
+    assert first_snapshot.pc_raw_invalid_delta == 3
+
+    stats.observe_parser_stats(raw_total=250, raw_invalid=8)
+    second = protocol.parse_status_packet(
+        make_status_packet(tx_done_counter=1100, tx_start_counter=1100)
+    )
+    assert second is not None
+
+    second_snapshot = stats.observe_status(second)
+
+    assert second_snapshot.pc_raw_total_candidates == 250
+    assert second_snapshot.pc_raw_invalid_candidates == 8
+    assert second_snapshot.pc_raw_invalid_delta == 5
 
 
 def test_firmware_raw_packet_declares_sequence_extended_layout():
@@ -166,3 +245,32 @@ def test_firmware_declares_phase_a_status_diagnostics():
     assert "HAL_UART_TxCpltCallback" in MAIN_C
     assert "raw_diag_tx_busy_counter++" in MAIN_C
     assert "raw_diag_ppg_fifo_empty_counter++" in MAIN_C
+
+
+def test_firmware_schedules_status_after_raw_dma_completion():
+    assert "TryTransmitStatusFrame();" not in MAIN_C
+    tx_callback = MAIN_C.split("void HAL_UART_TxCpltCallback", 1)[1]
+    assert "raw_diag_status_pending" in tx_callback
+    assert "BuildStatusFrame();" in tx_callback
+    assert "HAL_UART_Transmit_DMA(&huart2, statusData, STATUS_PACKET_LEN)" in tx_callback
+
+
+def test_firmware_enables_ble_init_with_config_commands():
+    assert "static void BLE_Init(void);" in MAIN_C
+    assert "BLE_Init();" in MAIN_C
+    assert "#if 0\nstatic void BLE_Init(void)" not in MAIN_C
+    for command in [
+        "<ST_WAKE=FOREVER>",
+        "<ST_CON_MIN_GAP=75>",
+        "<ST_CON_MAX_GAP=75>",
+        "<ST_CON_TIMEOUT=8000>",
+    ]:
+        assert command in MAIN_C
+
+
+def test_firmware_ble_debug_readback_is_removed():
+    assert "BLE_SendCommandAndEcho" not in MAIN_C
+    assert "BLE_ReadResponse" not in MAIN_C
+    assert "BLE_PrintResponse" not in MAIN_C
+    assert "BLE_DIAG_BEGIN" not in MAIN_C
+    assert "RD_CON_TIMEOUT" not in MAIN_C

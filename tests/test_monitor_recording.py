@@ -72,6 +72,81 @@ def test_raw_csv_exports_sequence_and_missing_count():
     assert raw_data_panel.raw_packet_to_csv_row(pkt, 1.23, 2)[:3] == [1.23, 42, 2]
 
 
+def test_timeline_csv_expands_missing_samples_as_nan_rows():
+    pkt = SimpleNamespace(
+        sequence=42,
+        Uc1=1.0,
+        Uc2=2.0,
+        Ut1=3.0,
+        Ut2=4.0,
+        acc_x=0.1,
+        acc_y=0.2,
+        acc_z=0.3,
+        gyro_x=1.1,
+        gyro_y=1.2,
+        gyro_z=1.3,
+        ppg_green=100,
+        ppg_red=200,
+        ppg_ir=300,
+    )
+
+    rows = raw_data_panel.timeline_packet_to_csv_rows(
+        pkt,
+        sample_index=5,
+        missing_before=2,
+    )
+
+    assert raw_data_panel.TIMELINE_CSV_HEADER[:7] == [
+        "Time(s)",
+        "SampleIndex",
+        "Seq",
+        "ValidFlag",
+        "InterpFlag",
+        "GapLen",
+        "MissingBefore",
+    ]
+    assert rows[0][:7] == [0.03, 3, 40, 0, 0, 2, ""]
+    assert rows[1][:7] == [0.04, 4, 41, 0, 0, 2, ""]
+    assert rows[2][:7] == [0.05, 5, 42, 1, 0, 0, 2]
+    assert rows[0][7:] == ["NaN"] * 13
+    assert rows[2][7:] == [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+        0.1,
+        0.2,
+        0.3,
+        1.1,
+        1.2,
+        1.3,
+        100,
+        200,
+        300,
+    ]
+
+
+def test_quality_event_row_records_gap_on_device_timeline():
+    pkt = SimpleNamespace(sequence=42)
+
+    row = raw_data_panel.quality_gap_event_to_csv_row(
+        pkt,
+        sample_index=5,
+        missing_before=2,
+        total_missing=7,
+    )
+
+    assert raw_data_panel.QUALITY_EVENTS_CSV_HEADER == [
+        "EventTime(s)",
+        "EventType",
+        "GapStartSampleIndex",
+        "GapLen",
+        "NextSeq",
+        "PcMissingRaw",
+    ]
+    assert row == [0.03, "seq_gap", 3, 2, 42, 7]
+
+
 def test_status_summary_exposes_diagnostic_counters():
     status = protocol.StatusPacket(
         protocol_version=1,
@@ -94,7 +169,7 @@ def test_status_summary_exposes_diagnostic_counters():
 
     assert "Busy 7" in text
     assert "Err 2" in text
-    assert "PCGap 97" in text
+    assert "PCGap 0" in text
     assert "FIFO 5/6" in text
 
 
@@ -114,7 +189,9 @@ def test_status_csv_row_exports_diagnostic_snapshot():
         ppg_fifo_empty_counter=5,
         ppg_fifo_overflow_counter=6,
     )
-    snapshot = raw_data_panel.RawQualityStats().observe_status(status)
+    stats = raw_data_panel.RawQualityStats()
+    stats.observe_parser_stats(raw_total=120, raw_invalid=3)
+    snapshot = stats.observe_status(status)
 
     assert raw_data_panel.STATUS_CSV_HEADER[:4] == [
         "RxTime(s)",
@@ -128,3 +205,17 @@ def test_status_csv_row_exports_diagnostic_snapshot():
         100,
         99,
     ]
+    assert raw_data_panel.STATUS_CSV_HEADER[-3:] == [
+        "PcRawTotalCandidates",
+        "PcRawInvalidCandidates",
+        "PcRawInvalidDelta",
+    ]
+    assert raw_data_panel.status_packet_to_csv_row(status, snapshot, 1.25)[-3:] == [
+        120,
+        3,
+        3,
+    ]
+
+
+def test_serial_reader_exposes_raw_parse_stats_signal():
+    assert hasattr(serial_reader.SerialReader, "raw_parse_stats_received")

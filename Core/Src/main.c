@@ -112,7 +112,6 @@ static uint8_t algorithm_initialized = 0;
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len);
 static void WriteU32BE(uint8_t *dst, uint32_t value);
 static void BuildStatusFrame(void);
-static void TryTransmitStatusFrame(void);
 
 // PPG配置函数
 #if (CURRENT_WORK_MODE == MODE_SPO2)
@@ -120,10 +119,8 @@ static void PPG_Config_SpO2_Hardcoded(void);
 #endif
 static void PPG_Config_Green_Hardcoded(void);
 
-// 蓝牙初始化函数 (当前未启用, 保留待用)
-#if 0
 static void BLE_Init(void);
-#endif
+static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len);
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -189,9 +186,9 @@ int main(void)
   /* ====================================================================
    * 蓝牙模块初始化
    * ==================================================================== */
-//  BLE_Init();
-//  HAL_Delay(200);
-//  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: BLE Init OK\r\n", 21, 1000);
+  BLE_Init();
+  HAL_Delay(200);
+  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: BLE Init OK\r\n", 21, 1000);
 
   /* ====================================================================
    * 模块检测阶段 (Sensor Check Phase)
@@ -296,10 +293,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-#if (ENABLE_RAW_DATA_PACKET)
-    TryTransmitStatusFrame();
-#endif
-
 #if (!ENABLE_RAW_DATA_PACKET)
     /* ---- 在线心率模式: 每秒执行一次解算并发送 HR 结果包 ---- */
     if (algorithm_initialized && hr_state.flag_1s_ready) {
@@ -637,53 +630,32 @@ void SystemClock_Config(void)
 
 /* USER CODE BEGIN 4 */
 
-// 蓝牙初始化 (当前未启用, 需要时移除 #if 0 守卫)
-#if 0
+// 蓝牙配置。当前硬件调试口与 BLE 共用 UART, 不在固件内读回应答。
 static void BLE_Init(void)
 {
-    static const uint8_t CMD_WAKE[]     = "<ST_WAKE=FOREVER>";
-    static const uint8_t CMD_TX_POWER[] = "<ST_TX POWER=+2.5>";
-    static const uint8_t CMD_NAME[]     = "<ST_NAME=HJ-131-LYX-5>";
-    static const uint8_t CMD_SECRET[]   = "<ST_SECRET=123456>";
-    static const uint8_t CMD_BAUD[]     = "<ST_BAUD=115200>";
-    static const uint8_t CMD_MIN_GAP[]  = "<ST_CON_MIN_GAP=75>";
+    static const uint8_t CMD_WAKE[]        = "<ST_WAKE=FOREVER>";
+    static const uint8_t CMD_BAUD[]        = "<ST_BAUD=115200>";
+    static const uint8_t CMD_MIN_GAP[]     = "<ST_CON_MIN_GAP=75>";
+    static const uint8_t CMD_MAX_GAP[]     = "<ST_CON_MAX_GAP=75>";
+    static const uint8_t CMD_TIMEOUT[]     = "<ST_CON_TIMEOUT=8000>";
 
-    // 0. 发送唤醒序列 RX 接收缓冲区清零，当接收到 0XAA 判断唤醒 BLE
+    // 0. 发送唤醒序列。若模块已是 FOREVER 模式，该步骤无副作用。
     uint8_t wakeup_seq[] = {0xAA, 0xAA, 0xAA, 0xAA};
     HAL_UART_Transmit(&huart2, wakeup_seq, sizeof(wakeup_seq), 100);
     HAL_Delay(50);
 
-    // 1. 设置全常开模式（不睡眠）
-    HAL_UART_Transmit(&huart2, CMD_WAKE, sizeof(CMD_WAKE)-1, 0xFFFF);
-    HAL_Delay(50);
+    BLE_SendConfigCommand(CMD_WAKE, sizeof(CMD_WAKE) - 1);
+    BLE_SendConfigCommand(CMD_BAUD, sizeof(CMD_BAUD) - 1);
+    BLE_SendConfigCommand(CMD_MIN_GAP, sizeof(CMD_MIN_GAP) - 1);
+    BLE_SendConfigCommand(CMD_MAX_GAP, sizeof(CMD_MAX_GAP) - 1);
+    BLE_SendConfigCommand(CMD_TIMEOUT, sizeof(CMD_TIMEOUT) - 1);
+}
 
-    // 2. 设置发射功率及蓝牙名称
-    HAL_UART_Transmit(&huart2, CMD_TX_POWER, sizeof(CMD_TX_POWER)-1, 0xFFFF);
-    HAL_Delay(50);
-    HAL_UART_Transmit(&huart2, CMD_NAME, sizeof(CMD_NAME)-1, 0xFFFF);
-    HAL_Delay(50);
-
-    // 3. 设置配对密码，供 APP 连接权限
-    HAL_UART_Transmit(&huart2, CMD_SECRET, sizeof(CMD_SECRET)-1, 0xFFFF);
-    HAL_Delay(50);
-
-    // 4. 发送波特率切换指令 (此时 MCU 仍然是 19200bps)
-    HAL_UART_Transmit(&huart2, CMD_BAUD, sizeof(CMD_BAUD)-1, 0xFFFF);
-    HAL_Delay(50);
-
-    // 5. MCU 切换到新的波特率
-    huart2.Init.BaudRate = 115200;
-    if (HAL_UART_Init(&huart2) != HAL_OK)
-    {
-        Error_Handler();
-    }
-    HAL_Delay(10);
-
-    // 6. 用新的 115200bps 发送后续指令
-    HAL_UART_Transmit(&huart2, CMD_MIN_GAP, sizeof(CMD_MIN_GAP)-1, 0xFFFF);
+static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t *)cmd, len, 1000);
     HAL_Delay(50);
 }
-#endif /* BLE_Init 守卫结束 */
 
 // 校验函数
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len)
@@ -728,23 +700,6 @@ static void BuildStatusFrame(void)
 
   statusData[STATUS_XOR_INDEX] = CheckXOR(&statusData[2], STATUS_XOR_CHECK_LEN);
   statusData[STATUS_FOOTER_INDEX] = 0xCC;
-}
-
-static void TryTransmitStatusFrame(void)
-{
-  if (!raw_diag_status_pending) {
-      return;
-  }
-
-  if (huart2.gState != HAL_UART_STATE_READY) {
-      return;
-  }
-
-  BuildStatusFrame();
-  if (HAL_UART_Transmit_DMA(&huart2, statusData, STATUS_PACKET_LEN) == HAL_OK) {
-      raw_diag_dma_tx_kind = 2;
-      raw_diag_status_pending = 0;
-  }
 }
 
 // PPG 血氧模式硬编码配置 (仅 SpO2 模式编译)
@@ -893,8 +848,17 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
     if (huart == &huart2) {
         if (raw_diag_dma_tx_kind == 1) {
             raw_diag_tx_done_counter++;
+            raw_diag_dma_tx_kind = 0;
+            if (raw_diag_status_pending) {
+                BuildStatusFrame();
+                if (HAL_UART_Transmit_DMA(&huart2, statusData, STATUS_PACKET_LEN) == HAL_OK) {
+                    raw_diag_dma_tx_kind = 2;
+                    raw_diag_status_pending = 0;
+                }
+            }
+        } else {
+            raw_diag_dma_tx_kind = 0;
         }
-        raw_diag_dma_tx_kind = 0;
     }
 }
 

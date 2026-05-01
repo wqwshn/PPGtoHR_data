@@ -43,6 +43,8 @@ class SerialReader(QThread):
     raw_packet_received = pyqtSignal(RawDataPacket)
     # 信号: Raw 链路诊断状态包 (1Hz)
     status_packet_received = pyqtSignal(StatusPacket)
+    # 信号: PC 端 Raw 候选帧解析统计 (总候选帧, 无效候选帧)
+    raw_parse_stats_received = pyqtSignal(int, int)
     # 信号: 陀螺仪标定状态文本
     calib_status_received = pyqtSignal(str)
     # 信号: 错误信息
@@ -147,6 +149,10 @@ class SerialReader(QThread):
                             else:
                                 status = parse_status_packet(bytes(buf))
                                 if status is not None:
+                                    self.raw_parse_stats_received.emit(
+                                        self._raw_total,
+                                        self._raw_invalid,
+                                    )
                                     self.status_packet_received.emit(status)
                             # 重置状态机
                             state = 0

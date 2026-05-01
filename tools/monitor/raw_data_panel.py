@@ -44,6 +44,16 @@ RAW_CSV_HEADER = [
     "GyroX(dps)", "GyroY(dps)", "GyroZ(dps)",
     "PPG_Green", "PPG_Red", "PPG_IR",
 ]
+TIMELINE_CSV_HEADER = [
+    "Time(s)", "SampleIndex", "Seq", "ValidFlag", "InterpFlag", "GapLen", "MissingBefore",
+    "Uc1(mV)", "Uc2(mV)", "Ut1(mV)", "Ut2(mV)",
+    "AccX(g)", "AccY(g)", "AccZ(g)",
+    "GyroX(dps)", "GyroY(dps)", "GyroZ(dps)",
+    "PPG_Green", "PPG_Red", "PPG_IR",
+]
+QUALITY_EVENTS_CSV_HEADER = [
+    "EventTime(s)", "EventType", "GapStartSampleIndex", "GapLen", "NextSeq", "PcMissingRaw",
+]
 STATUS_CSV_HEADER = [
     "RxTime(s)", "McuTime(ms)", "SampleCounter", "FrameCounter",
     "TxStartCounter", "TxDoneCounter", "TxBusyCounter", "TxErrorCounter",
@@ -51,6 +61,7 @@ STATUS_CSV_HEADER = [
     "PpgFifoEmptyCounter", "PpgFifoOverflowCounter",
     "PcReceivedRaw", "PcExpectedRaw", "PcMissingRaw",
     "PcMissingAfterTxDone", "TxInflight",
+    "PcRawTotalCandidates", "PcRawInvalidCandidates", "PcRawInvalidDelta",
 ]
 
 
@@ -72,6 +83,68 @@ def raw_packet_to_csv_row(pkt: RawDataPacket, elapsed: float, missing_before: in
         round(pkt.acc_x, 5), round(pkt.acc_y, 5), round(pkt.acc_z, 5),
         round(pkt.gyro_x, 3), round(pkt.gyro_y, 3), round(pkt.gyro_z, 3),
         pkt.ppg_green, pkt.ppg_red, pkt.ppg_ir,
+    ]
+
+
+def _packet_values(pkt: RawDataPacket) -> list:
+    return [
+        round(pkt.Uc1, 5), round(pkt.Uc2, 5),
+        round(pkt.Ut1, 5), round(pkt.Ut2, 5),
+        round(pkt.acc_x, 5), round(pkt.acc_y, 5), round(pkt.acc_z, 5),
+        round(pkt.gyro_x, 3), round(pkt.gyro_y, 3), round(pkt.gyro_z, 3),
+        pkt.ppg_green, pkt.ppg_red, pkt.ppg_ir,
+    ]
+
+
+def timeline_packet_to_csv_rows(
+    pkt: RawDataPacket,
+    sample_index: int,
+    missing_before: int,
+) -> list[list]:
+    rows: list[list] = []
+    missing_start = sample_index - missing_before
+    missing_seq_start = (pkt.sequence - missing_before) & 0xFFFF
+    for offset in range(missing_before):
+        idx = missing_start + offset
+        seq = (missing_seq_start + offset) & 0xFFFF
+        rows.append([
+            sample_index_to_elapsed_seconds(idx),
+            idx,
+            seq,
+            0,
+            0,
+            missing_before,
+            "",
+            *(["NaN"] * 13),
+        ])
+
+    rows.append([
+        sample_index_to_elapsed_seconds(sample_index),
+        sample_index,
+        pkt.sequence,
+        1,
+        0,
+        0,
+        missing_before,
+        *_packet_values(pkt),
+    ])
+    return rows
+
+
+def quality_gap_event_to_csv_row(
+    pkt: RawDataPacket,
+    sample_index: int,
+    missing_before: int,
+    total_missing: int,
+) -> list:
+    gap_start = sample_index - missing_before
+    return [
+        sample_index_to_elapsed_seconds(gap_start),
+        "seq_gap",
+        gap_start,
+        missing_before,
+        pkt.sequence,
+        total_missing,
     ]
 
 
@@ -110,6 +183,9 @@ def status_packet_to_csv_row(
         snapshot.pc_missing_raw,
         snapshot.pc_missing_after_tx_done,
         snapshot.tx_inflight,
+        snapshot.pc_raw_total_candidates,
+        snapshot.pc_raw_invalid_candidates,
+        snapshot.pc_raw_invalid_delta,
     ]
 
 
@@ -156,6 +232,10 @@ class RawDataPanel(QWidget):
         self._csv_writer = None
         self._status_csv_file = None
         self._status_csv_writer = None
+        self._timeline_csv_file = None
+        self._timeline_csv_writer = None
+        self._quality_events_csv_file = None
+        self._quality_events_csv_writer = None
         self._recording_start_time: Optional[float] = None
         self._recorded_sample_count = 0
         self._flush_counter = 0
@@ -361,12 +441,30 @@ class RawDataPanel(QWidget):
 
         # CSV 实时写入
         if self._is_recording and self._csv_writer:
-            elapsed = sample_index_to_elapsed_seconds(self._recorded_sample_count)
+            sample_index = max(self._quality.expected_count - 1, 0)
+            elapsed = sample_index_to_elapsed_seconds(sample_index)
             self._csv_writer.writerow(raw_packet_to_csv_row(pkt, elapsed, missing_before))
+            if self._timeline_csv_writer:
+                self._timeline_csv_writer.writerows(
+                    timeline_packet_to_csv_rows(pkt, sample_index, missing_before)
+                )
+            if missing_before > 0 and self._quality_events_csv_writer:
+                self._quality_events_csv_writer.writerow(
+                    quality_gap_event_to_csv_row(
+                        pkt,
+                        sample_index,
+                        missing_before,
+                        self._quality.missing_count,
+                    )
+                )
             self._recorded_sample_count += 1
             self._flush_counter += 1
             if self._flush_counter >= 100:
                 self._csv_file.flush()
+                if self._timeline_csv_file:
+                    self._timeline_csv_file.flush()
+                if self._quality_events_csv_file:
+                    self._quality_events_csv_file.flush()
                 self._flush_counter = 0
 
         # 缓存最新包, 信息条由 _update_plots 按帧率更新
@@ -413,6 +511,10 @@ class RawDataPanel(QWidget):
             elapsed = time.time() - start
             self._status_csv_writer.writerow(status_packet_to_csv_row(status, snapshot, elapsed))
             self._status_csv_file.flush()
+
+    def handle_raw_parse_stats(self, raw_total: int, raw_invalid: int):
+        """Record PC-side Raw parser counters for the next STATUS snapshot."""
+        self._quality.observe_parser_stats(raw_total, raw_invalid)
 
     def _update_plots(self):
         """33ms 定时刷新波形, 仅绘制最近 VISIBLE_POINTS 个点"""
@@ -501,12 +603,22 @@ class RawDataPanel(QWidget):
                 save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             )
             status_path = path.replace(".csv", "_status.csv")
+            timeline_path = path.replace(".csv", "_timeline.csv")
+            quality_events_path = path.replace(".csv", "_quality_events.csv")
             self._csv_file = open(path, "w", newline="", encoding="utf-8-sig")
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow(RAW_CSV_HEADER)
             self._status_csv_file = open(status_path, "w", newline="", encoding="utf-8-sig")
             self._status_csv_writer = csv.writer(self._status_csv_file)
             self._status_csv_writer.writerow(STATUS_CSV_HEADER)
+            self._timeline_csv_file = open(timeline_path, "w", newline="", encoding="utf-8-sig")
+            self._timeline_csv_writer = csv.writer(self._timeline_csv_file)
+            self._timeline_csv_writer.writerow(TIMELINE_CSV_HEADER)
+            self._quality_events_csv_file = open(
+                quality_events_path, "w", newline="", encoding="utf-8-sig"
+            )
+            self._quality_events_csv_writer = csv.writer(self._quality_events_csv_file)
+            self._quality_events_csv_writer.writerow(QUALITY_EVENTS_CSV_HEADER)
             self._recording_start_time = time.time()
             self._recorded_sample_count = 0
             self._reset_quality_stats()
@@ -530,6 +642,16 @@ class RawDataPanel(QWidget):
             self._status_csv_file.close()
             self._status_csv_file = None
             self._status_csv_writer = None
+        if self._timeline_csv_file:
+            self._timeline_csv_file.flush()
+            self._timeline_csv_file.close()
+            self._timeline_csv_file = None
+            self._timeline_csv_writer = None
+        if self._quality_events_csv_file:
+            self._quality_events_csv_file.flush()
+            self._quality_events_csv_file.close()
+            self._quality_events_csv_file = None
+            self._quality_events_csv_writer = None
         self._recording_start_time = None
         self._recorded_sample_count = 0
 

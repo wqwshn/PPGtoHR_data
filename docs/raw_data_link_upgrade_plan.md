@@ -426,9 +426,135 @@ ACK/重传必要性：
 - 优化上位机读取、解析、绘图和写盘解耦；
 - 升级 DATA 帧到 V2 + CRC16。
 
+#### 2026-04-30 15min 采集反馈分析与阶段 B 修正
+
+采集条件：外部计时 15min，全程停留原始数据面板，电脑无明显卡顿，传感器静置于水平面。停止时 UI 显示 `Loss=3.55%`，`Diag: Busy 956 | Err 0 | PCGap 6155 | FIFO 48048/0`。对应文件位于 `bug/raw_data_20260430_135512.csv` 和 `bug/raw_data_20260430_135512_status.csv`。
+
+关键结论：
+
+- STATUS 记录覆盖 900s，`sample_counter` 增量 90000，`frame_counter` 增量 90000，说明 TIM16 采样 tick 和 MCU 组帧稳定为 100Hz。
+- `tx_start_counter` 和 `tx_done_counter` 增量均为 89100，`tx_error_counter=0`，说明 Raw DATA 已启动的 DMA 均完成，没有 UART/DMA error。
+- `tx_busy_counter` 增量为 900，恰好约 1 次/秒；这不是随机链路抖动，而是阶段 A 新增 1Hz STATUS 帧占用同一 UART DMA 后，下一帧 Raw DATA 发送遇到 `HAL_BUSY`。
+- Raw CSV 中 883 个 gap 为 1 个样本，正好对应上述 1Hz busy 型缺口，是阶段 A 诊断帧调度引入的系统性损失。
+- 另有 61 个大 gap，常见长度约 30-40 个样本，并有一次 286 样本 gap；这类缺失不是 MCU 采样/组帧失败，也不是 `tx_error`，更像 UART/BLE 透传链路或 PC 接收解析路径的成片丢失，需要下一轮采集继续确认。
+- `_status.csv` 中原 `PCGap` 直接用 MCU 绝对 `tx_done_counter - PcReceivedRaw` 计算，包含了录制开始前 MCU 已发送的历史帧，导致显示值偏大。该值应从录制后的首个 STATUS 建立基线，用增量计算。
+- `ppg_fifo_empty_counter` 约 50/s，说明当前静置条件下约半数 Raw 周期没有新的 PPG FIFO 样本，固件复用上一有效均值；这不直接等同于 UART 丢包，但会影响 PPG 原始值更新率，后续可单独核查 MAX30101 FIFO 读取节拍。
+
+阶段 B 已实施的最小修正：
+
+1. **STATUS 发送调度修正**：取消主循环开头的 `TryTransmitStatusFrame()` 主动发送，改为在 Raw DATA `HAL_UART_TxCpltCallback()` 完成后，如果存在待发 STATUS，再启动 STATUS DMA。这样 STATUS 不再抢在 Raw DATA 前占用 UART DMA，预计消除约 1Hz 的系统性 `tx_busy` 缺口。
+2. **PCGap 基线修正**：上位机 `RawQualityStats.observe_status()` 在首个 STATUS 处记录 `tx_done_counter` 和 `PcReceivedRaw` 基线，后续 `PCMissingAfterTxDone` 使用增量差值，避免把录制前的历史发送计入本次采集缺失。
+
+下一轮验证重点：
+
+- `tx_busy_counter` 是否从约 1/s 降为 0 或接近 0。
+- `Loss` 是否至少下降约 1 个百分点；如果仍存在 30-40 样本成片 gap，则优先排查 UART/BLE 透传或 PC 端接收解析路径。
+- `_status.csv` 的 `PCMissingAfterTxDone` 是否从 0 开始累计，不再带入录制前历史偏移。
+- `ppg_fifo_empty_counter` 是否仍约 50/s；若是，后续另行处理 PPG FIFO 读取节拍。
+
+#### 2026-04-30 第二次 15min 采集反馈分析
+
+第二次采集文件为 `bug/raw_data_20260430_143115.csv` 和 `bug/raw_data_20260430_143115_status.csv`。采集条件与第一次一致，停止时反馈 `PcGap=2161`，其余诊断项为 0，`Loss` 下降约 1 个百分点。
+
+对比第一次采集后的关键变化：
+
+- STATUS 增量中 `sample_counter/frame_counter/tx_start_counter/tx_done_counter` 均为 89900，`tx_busy_counter=0`，`tx_error_counter=0`，说明阶段 B 的 STATUS 调度修正已经消除 1Hz `HAL_BUSY` 型系统性缺口。
+- Raw 缺失从 3205 降到 2125，丢失率从约 3.56% 降到约 2.36%。
+- 第一次采集有 944 个 gap，其中 883 个为 1 样本 gap；第二次采集有 60 个 gap，全部为成片 gap，常见长度为 30-38 样本。
+- 第二次成片 gap 的间隔高度稳定，平均约 14.726s；常见间隔为 14.70-14.75s。该周期性不符合 MCU 采样/组帧随机失败，也不符合 UART DMA busy。
+- `PCMissingAfterTxDone` 与 Raw `PcMissingRaw` 同步累计到 2125，且 MCU 侧 `tx_done_counter` 已经完成对应发送，说明剩余缺口发生在 MCU DMA 完成之后，优先怀疑 UART/BLE 透传链路或 PC 字节流接收/帧同步/校验解析路径。
+- `PpgFifoEmptyCounter` 仍约 50/s，`PpgFifoOverflowCounter=0`。这属于 PPG FIFO 读取节拍问题，不解释当前 Raw 帧序号缺口，但后续处理信号质量时需要单独评估。
+
+因此，阶段 B 不应立即进入时间轴补救，也不应直接猜测性修改插值或重传策略。下一步先补 PC 侧解析统计到 `_status.csv`：
+
+- `PcRawTotalCandidates`：PC 串口状态机收满的 Raw 候选帧数量。
+- `PcRawInvalidCandidates`：Raw 候选帧中未通过解析/校验的数量。
+- `PcRawInvalidDelta`：相邻 STATUS 快照之间新增的无效候选帧数量。
+
+下一轮采集判断规则：
+
+- 如果周期性 gap 出现时 `PcRawInvalidDelta` 同步增加，说明字节大概率到达 PC，但帧内容损坏、帧尾/XOR 不匹配或状态机失同步，需要优先升级帧保护、错误上下文记录和解析恢复。
+- 如果周期性 gap 出现时 `PcRawInvalidDelta` 仍为 0，说明 PC 没有形成对应 Raw 候选帧，更像 UART/BLE 透传或底层串口驱动在该周期丢失了一段字节，需要优先做直连串口/不同透传模块/更高波特率或 headless 采集对照。
+
+#### 2026-04-30 HJ-131IMH + HJ-380 BLE 透传链路判断
+
+硬件链路为 MCU USART2 -> HJ-131IMH BLE 从机 -> HJ-380 USB DONGLE 主机 -> PC CH340 虚拟串口。用户观察到 HJ-380 蓝灯在采集时会周期性短暂熄灭后继续高频闪烁，这与第二次采集中约 14.726s 出现一次、每次 30-50 样本的成片 gap 高度吻合。
+
+手册和当前配置要点：
+
+- HJ-380 手册说明 D3 蓝灯为 USB DONGLE 串口收发数据指示，串口收发数据时闪烁，用于代表当前 USB 通信正常；D2 绿灯才是主机连接状态指示，连接从机成功常亮，断开熄灭。
+- HJ-380 自动连接模式下为纯透传模式，主机与从机互相发送数据不需要地址前缀；该模式目前只支持单个设备自动连接。
+- HJ-380 串口波特率支持到 921600bps；HJ-131IMH 串口波特率支持到 1Mbps。当前 MCU 与上位机均使用 115200bps。
+- HJ-131IMH 默认串口参数为 19200bps N81，默认最小/最大连接间隔为 15ms，默认连接超时为 3s，唤醒后进入低功耗状态等待时间为 3s。
+- HJ-131IMH 支持 `ST_WAKE=ONCE` 和 `ST_WAKE=FOREVER` 全速运行模式；`FOREVER` 会掉电保存，适合不考虑功耗、需要长期大数据交互的场合。
+- 2026-05-01 前，固件 `Core/Src/main.c` 中的 `BLE_Init()` 在 `#if 0` 内，且调用处被注释；其中只保留了 `<ST_WAKE=FOREVER>`、`<ST_BAUD=115200>` 和 `<ST_CON_MIN_GAP=75>` 等历史配置代码，并不会在上电流程自动执行。也就是说，旧版本 BLE 模组实际运行参数依赖模块已保存配置或外部工具配置，不能从固件保证。
+
+结合第二次采集计数守恒关系，当前优先判断为：
+
+- MCU 采样、组帧、USART DMA 启动和完成没有表现出缺口来源；`tx_done_counter` 已经完成发送。
+- 如果 HJ-380 D2 绿灯在蓝灯短暂熄灭期间仍保持常亮，则更像 BLE/USB 透传数据通道短暂停顿或丢段，而不是连接断开。
+- 如果 D2 绿灯也同步熄灭或 HJ-131 `BLE_STATE` 引脚同步拉低，则说明存在周期性断连/重连，需要优先处理连接参数、距离/天线/供电和 DONGLE 自动连接策略。
+- 14.7s 周期不对应 HJ-131 默认 3s 连接超时、3s 低功耗等待或 15ms 连接间隔；它更像 DONGLE/透传固件内部调度、缓冲刷新、链路质量退避或主机侧 USB 输出暂停造成的周期性数据空窗。
+
+后续阶段 B 的 BLE 定位顺序调整为：
+
+1. **记录指示灯和状态引脚**：下一次采集时同时观察 HJ-380 D2 绿灯和 D3 蓝灯。若条件允许，把 HJ-131 `BLE_STATE` 引脚变化加入 STATUS 计数，记录连接状态低电平次数和持续时间。
+2. **读取并锁定 BLE 参数**：用指令确认 HJ-131 的 `RD_BAUD`、`RD_WAKE`、`RD_CON_MIN_GAP`、`RD_CON_MAX_GAP`、`RD_CON_TIMEOUT`；确认 HJ-380 的 `RD_BAUD`、`RD_AUTO_CONNECT`、`RD_HJ580_MODE`。优先把 HJ-131 设置为 `ST_WAKE=FOREVER`，并把最小/最大连接间隔同时设为 7.5ms，即 `ST_CON_MIN_GAP=75` 和 `ST_CON_MAX_GAP=75`。
+3. **做旁路对照**：用 USB-TTL 或 ST-Link VCP 直连 MCU USART2 绕过 BLE，保持 100Hz Raw 与同一上位机采集 15min。如果直连无周期性 gap，BLE 透传链路即可基本定责。
+4. **做速率对照**：如果 BLE 必须保留，分别测试 100Hz、75Hz、50Hz Raw，或减少 Raw payload 通道数，找出 HJ-131 + HJ-380 组合在当前环境下的可靠吞吐边界。
+5. **再考虑波特率**：提高 HJ-131、HJ-380 和 PC 串口到 230400/460800 只能降低 UART/USB 侧排队时间，不能保证提高 BLE 空口吞吐；应作为对照项，而不是默认修复。
+
+2026-05-01 已对阶段 B 固件加入 HJ-131IMH 参数读回诊断：
+
+- 上电后执行 `BLE_Init()`，先发送唤醒序列，再设置 `ST_WAKE=FOREVER`、`ST_BAUD=115200`、`ST_CON_MIN_GAP=75`、`ST_CON_MAX_GAP=75`、`ST_CON_TIMEOUT=8000`。
+- 随后读取 `RD_BAUD`、`RD_WAKE`、`RD_CON_MIN_GAP`、`RD_CON_MAX_GAP`、`RD_CON_TIMEOUT`、`RD_LINK`。
+- HJ-131IMH 的指令应答先回到 MCU UART RX，固件会再以普通透传文本转发到 HJ-380。串口助手应能看到 `BLE_DIAG_BEGIN`、多行 `BLE_DIAG <label>=<response>` 和 `BLE_DIAG_END`。
+- 判断重点：期望读回 `rd_baud=115200`、`rd_wake=forever`、连接间隔读回值包含 `75,75` 或等价最小/最大值、超时读回 `8000`。若某项为 `<timeout>`，优先怀疑当前 MCU 波特率与 HJ-131IMH 保存波特率不一致、模块未被唤醒、或应答没有正确回到 MCU RX。
+
+2026-05-01 首次 BLE 读回反馈：
+
+- 串口助手能看到 `<ST_WAKE=FOREVER>` 等命令原文，随后大多数 `BLE_DIAG ...=<timeout>`；这说明 PC 看到的是 MCU TX 发出的命令副本，而 MCU 没有稳定收到 HJ-131IMH 的本地应答。
+- 用户补充当前 STM32 USART2 同时并接 HJ-131IMH 和串口调试口。该拓扑中 `STM32_TX -> HJ-131_RX + USB串口_RX` 属于一个发送端驱动多个接收端，通常可用于观察输出；但 `HJ-131_TX + USB串口_TX -> STM32_RX` 是两个推挽发送端并到同一接收端，可能造成电平冲突或把 BLE 应答拉坏，导致 MCU 读回应答超时。
+- 因此，本次 `<timeout>` 不能直接证明 HJ-131IMH 配置错误；它首先证明“通过 MCU UART RX 读回 BLE 本地应答”的硬件通道不可信。
+- 下一轮 BLE 参数读回测试应临时断开 USB 串口 TX 到 STM32 RX 的线，只保留 GND 和 STM32_TX -> USB串口_RX 用于看调试输出，同时保持 HJ-131_TX -> STM32_RX。若断开后能读到 `<st_...=ok>` 和 `<rd_...>`，说明此前是并联 TX 冲突；若仍全部 timeout，再排查 HJ-131IMH 保存波特率、唤醒模式和指令解析。
+
+2026-05-01 阶段 C 开始后，因当前先认为 HJ-131IMH 配置正确，固件侧回退 BLE 读回诊断：
+
+- `BLE_Init()` 保留配置命令：唤醒序列、`ST_WAKE=FOREVER`、`ST_BAUD=115200`、`ST_CON_MIN_GAP=75`、`ST_CON_MAX_GAP=75`、`ST_CON_TIMEOUT=8000`。
+- 移除 `RD_*` 读指令、`BLE_DIAG_*` 文本和 MCU 内部 `HAL_UART_Receive()` 读回应答逻辑，避免在 UART 并接拓扑下制造误导性 `<timeout>` 日志。
+- 后续若需要重新做 BLE 参数读回，应先改变硬件连接，避免两个 TX 同时驱动 STM32 RX。
+
+如果确认这是 HJ-131 + HJ-380 透传链路的硬件/固件限制，则后续补救策略调整如下：
+
+- Raw 全量长期采集优先使用有线 UART/USB；BLE 保留给 1Hz 心率结果、状态摘要、参数配置和短时低速预览。
+- 若必须通过 BLE 采 Raw，则把目标从“100Hz 全量无丢失”调整为“低速或减字段 Raw + 显式质量标记”。建议先测试 50Hz 或只保留关键 PPG/IMU 字段。
+- 阶段 C 时间轴补救仍需要部署，但中长 gap 不应强行插值。对 30-50 样本这类 BLE 成片缺失，`timeline_aligned.csv` 应写显式 `NaN` 缺失行和 quality event；仅对 1-3 样本短 gap 允许可选插值。
+- 心率算法或后处理应跳过包含中长 BLE gap 的窗口，或在报告中标记该窗口低可信，避免把硬件透传缺口误当作生理信号变化。
+
 ### 8.3 阶段 C：部署时间轴补救
 
 目标：在主要丢失来源已定位或已缓解后，再把数据保存升级为可长期对齐的格式。
+
+#### 8.3.1 基于 BLE 周期性缺失的补救策略选择
+
+当前已知缺失形态以 HJ-131IMH + HJ-380 BLE 透传链路的周期性短时空窗为主，典型为约 14.7s 一次、每次 30-50 个 Raw 样本。该类缺失已经超过 1-3 个样本的短 gap 范围，不适合直接线性插值填补，否则会把硬件链路空窗伪装成连续生理信号。
+
+因此阶段 C 采用以下策略：
+
+- **原始接收层继续保留**：`raw_data_YYYYMMDD_HHMMSS.csv` 只写真实收到并通过校验的 Raw 帧，但 `Time(s)` 改为基于设备样本轴，而不是基于已接收行数，避免丢包后时间轴被压缩。
+- **规则时间轴层显式补洞**：新增 `raw_data_YYYYMMDD_HHMMSS_timeline.csv`，按 100Hz 样本轴展开；真实样本 `ValidFlag=1, InterpFlag=0`，缺失样本写 `NaN`，并标记 `ValidFlag=0, InterpFlag=0, GapLen=<缺失长度>`。
+- **质量事件层记录 gap**：新增 `raw_data_YYYYMMDD_HHMMSS_quality_events.csv`，每个序号 gap 写一行 `seq_gap`，记录 gap 起点、长度、后继 Seq 和累计缺失数，便于后处理跳过低可信窗口。
+- **暂不做自动插值**：对当前 30-50 样本 BLE 成片缺失不插值；未来若需要，可只对 1-3 样本短 gap 另行生成插值派生文件，且必须保留 `InterpFlag=1`。
+
+#### 8.3.2 STATUS 帧保留评估
+
+阶段 A 新增的固定长度 STATUS 帧为 53 字节、1Hz。相对 Raw DATA 的 35 字节 * 100Hz = 3500 字节/秒，STATUS 字节开销约 1.5%；按 UART 8N1 计算约 530 bit/s，相对 115200 bps 也很小。阶段 B 已将 STATUS 发送改为 Raw DATA DMA 完成后顺带发送，第二次采集证明 `tx_busy_counter=0`，不再造成 1Hz 系统性 Raw 缺口。
+
+结论：阶段 C 保留 1Hz 固定长度 STATUS 帧。理由：
+
+- `_status.csv` 仍是判断 MCU 采样/组帧/发送完成与 PC 接收缺失之间守恒关系的关键依据。
+- 开销低于当前 BLE 周期性空窗造成的 2% 级缺失，且不再引入 DMA busy。
+- 时间轴补救需要 STATUS 作为 quality summary 的外部证据，避免把链路缺失误判为上位机保存问题。
 
 建议工作：
 
