@@ -113,6 +113,12 @@ void Error_Handler(void);
  */
 #define ENABLE_RAW_DATA_PACKET  1
 
+/* HJ-131IMH BLE 配置开关:
+ * 0 = 上电不发送 BLE 配置指令
+ * 1 = 上电复位 BLE 模块后发送固定配置指令
+ */
+#define ENABLE_BLE_CONFIG       1
+
 /* PPG 通道选择: 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
 #define PPG_DEFAULT_CHANNEL     2
 

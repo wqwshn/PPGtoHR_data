@@ -120,6 +120,7 @@ static void PPG_Config_SpO2_Hardcoded(void);
 static void PPG_Config_Green_Hardcoded(void);
 
 static void BLE_Init(void);
+static void BLE_ResetModule(void);
 static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len);
 /* USER CODE END PV */
 
@@ -186,9 +187,19 @@ int main(void)
   /* ====================================================================
    * 蓝牙模块初始化
    * ==================================================================== */
+#if (ENABLE_BLE_CONFIG)
   BLE_Init();
   HAL_Delay(200);
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: BLE Init OK\r\n", 21, 1000);
+  {
+      static const uint8_t msg[] = "DEBUG: BLE Config OK\r\n";
+      HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg) - 1, 1000);
+  }
+#else
+  {
+      static const uint8_t msg[] = "DEBUG: BLE Config Disabled\r\n";
+      HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg) - 1, 1000);
+  }
+#endif
 
   /* ====================================================================
    * 模块检测阶段 (Sensor Check Phase)
@@ -634,10 +645,12 @@ void SystemClock_Config(void)
 static void BLE_Init(void)
 {
     static const uint8_t CMD_WAKE[]        = "<ST_WAKE=FOREVER>";
+    static const uint8_t CMD_TX_POWER[]    = "<ST_TX_POWER=+2.5>";
+    static const uint8_t CMD_NAME[]        = "<ST_NAME=HJ-131-LYX>";
     static const uint8_t CMD_BAUD[]        = "<ST_BAUD=115200>";
     static const uint8_t CMD_MIN_GAP[]     = "<ST_CON_MIN_GAP=75>";
-    static const uint8_t CMD_MAX_GAP[]     = "<ST_CON_MAX_GAP=75>";
-    static const uint8_t CMD_TIMEOUT[]     = "<ST_CON_TIMEOUT=8000>";
+
+    BLE_ResetModule();
 
     // 0. 发送唤醒序列。若模块已是 FOREVER 模式，该步骤无副作用。
     uint8_t wakeup_seq[] = {0xAA, 0xAA, 0xAA, 0xAA};
@@ -645,10 +658,18 @@ static void BLE_Init(void)
     HAL_Delay(50);
 
     BLE_SendConfigCommand(CMD_WAKE, sizeof(CMD_WAKE) - 1);
+    BLE_SendConfigCommand(CMD_TX_POWER, sizeof(CMD_TX_POWER) - 1);
+    BLE_SendConfigCommand(CMD_NAME, sizeof(CMD_NAME) - 1);
     BLE_SendConfigCommand(CMD_BAUD, sizeof(CMD_BAUD) - 1);
     BLE_SendConfigCommand(CMD_MIN_GAP, sizeof(CMD_MIN_GAP) - 1);
-    BLE_SendConfigCommand(CMD_MAX_GAP, sizeof(CMD_MAX_GAP) - 1);
-    BLE_SendConfigCommand(CMD_TIMEOUT, sizeof(CMD_TIMEOUT) - 1);
+}
+
+static void BLE_ResetModule(void)
+{
+    HAL_GPIO_WritePin(BLE_RST_GPIO_Port, BLE_RST_Pin, GPIO_PIN_SET);
+    HAL_Delay(100);
+    HAL_GPIO_WritePin(BLE_RST_GPIO_Port, BLE_RST_Pin, GPIO_PIN_RESET);
+    HAL_Delay(300);
 }
 
 static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len)

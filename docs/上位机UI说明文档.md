@@ -215,6 +215,7 @@ CSV 列定义:
 
 - `_timeline.csv`: 按 100Hz 设备样本轴展开。真实样本行 `ValidFlag=1, InterpFlag=0`; 缺失样本行 `ValidFlag=0, InterpFlag=0`, 传感器值写 `NaN`, `GapLen` 记录该缺失段长度。当前 BLE 周期性 30-50 样本 gap 不自动插值。
 - `_quality_events.csv`: 每个序号缺口记录一行 `seq_gap`, 包含 `GapStartSampleIndex`, `GapLen`, `NextSeq`, `PcMissingRaw`。后处理和心率窗口可据此跳过低可信区间。
+- 详细文件构成和 NaN 占空语义见 `docs/raw_data_file_structure.md`。
 
 ### 5.3 Raw 链路诊断 STATUS 包 (53 字节, 1Hz, 帧头 0xAA 0xDD)
 

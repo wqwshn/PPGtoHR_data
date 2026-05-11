@@ -96,7 +96,7 @@
  * 采样率信息字符串 (调试输出用)
  * ============================================================ */
 #if (PPG_SAMPLE_RATE == 50)
-#define PPG_RATE_STR    "50Hz (800/16x)"
+#define PPG_RATE_STR    "50Hz (800/16x, Multi-LED G+R+IR)"
 
 #elif (PPG_SAMPLE_RATE == 100)
 #define PPG_RATE_STR    "100Hz (800/8x, Multi-LED G+R+IR)"
@@ -107,20 +107,37 @@
 #endif
 
 /* ============================================================
- * 多光路时隙配置 (Multi-LED Mode, 仅 100Hz 有效)
+ * 多光路时隙配置 (Multi-LED Mode, G+R+IR 三通道)
  * SLOT1=GREEN(011), SLOT2=RED(001), SLOT3=IR(010), SLOT4=Disabled
  * CTRL1: [6:4]SLOT2=001 | [2:0]SLOT1=011 = 0x13
  * CTRL2: [6:4]SLOT4=000 | [2:0]SLOT3=010 = 0x02
+ *
+ * 时隙约束: 3 x LED_PW < 1/内部采样率
+ *   50Hz:  3 x 411us = 1233us < 1250us (1/800sps)  满足 OK
+ *   100Hz: 3 x 215us = 645us  < 1250us (1/800sps)  满足 OK
+ *   125Hz: 3 x 411us = 1233us > 1000us (1/1000sps) 不满足, 需降 PW 待验证
  * ============================================================ */
-#if (PPG_SAMPLE_RATE == 100)
+#if (PPG_SAMPLE_RATE == 50)
+/* PW=411us(18-bit), ADC=16384nA, SR=800sps, SMP_AVE=16x */
+#define MAX30101_MULTI_LED_CTRL1_VAL   0x13U
+#define MAX30101_MULTI_LED_CTRL2_VAL   0x02U
+#define MAX30101_PPG_CHANNELS          3U
+#define MAX30101_FIFO_SAMPLE_BYTES     (MAX30101_PPG_CHANNELS * 3U) /* 9 */
+#define MAX30101_PPG_RIGHT_SHIFT       0U   /* 18-bit: shift=3-code(3)=0 */
+#define MAX30101_PPG_VALID_MASK        0x03FFFFU
+
+#elif (PPG_SAMPLE_RATE == 100)
+/* PW=215us(17-bit), ADC=8192nA, SR=800sps, SMP_AVE=8x */
 #define MAX30101_MULTI_LED_CTRL1_VAL   0x13U
 #define MAX30101_MULTI_LED_CTRL2_VAL   0x02U
 #define MAX30101_PPG_CHANNELS          3U
 #define MAX30101_FIFO_SAMPLE_BYTES     (MAX30101_PPG_CHANNELS * 3U) /* 9 */
 #define MAX30101_PPG_RIGHT_SHIFT       1U   /* 17-bit: shift=3-code(2)=1 */
 #define MAX30101_PPG_VALID_MASK        0x01FFFFU
+
 #else
-#error "Multi-LED triple-wavelength mode currently supports 100Hz only"
+/* 125Hz 待适配 (需 PW=215us + SPO2_CONFIG=0x75) */
+#error "Multi-LED triple-wavelength mode currently supports 50Hz and 100Hz only"
 #endif
 
 #endif /* __SAMPLE_RATE_CONFIG_H */
