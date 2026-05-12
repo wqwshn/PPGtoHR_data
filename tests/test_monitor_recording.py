@@ -68,8 +68,17 @@ def test_raw_csv_exports_sequence_and_missing_count():
         ppg_ir=300,
     )
 
-    assert raw_data_panel.RAW_CSV_HEADER[:3] == ["Time(s)", "Seq", "MissingBefore"]
-    assert raw_data_panel.raw_packet_to_csv_row(pkt, 1.23, 2)[:3] == [1.23, 42, 2]
+    assert raw_data_panel.RAW_CSV_HEADER[:7] == [
+        "Time(s)",
+        "SampleIndex",
+        "Seq",
+        "ValidFlag",
+        "InterpFlag",
+        "GapLen",
+        "MissingBefore",
+    ]
+    rows = raw_data_panel.timeline_packet_to_csv_rows(pkt, sample_index=5, missing_before=2)
+    assert rows[-1][:7] == [0.05, 5, 42, 1, 0, 0, 2]
 
 
 def test_timeline_csv_expands_missing_samples_as_nan_rows():
@@ -126,25 +135,13 @@ def test_timeline_csv_expands_missing_samples_as_nan_rows():
     ]
 
 
-def test_quality_event_row_records_gap_on_device_timeline():
-    pkt = SimpleNamespace(sequence=42)
-
-    row = raw_data_panel.quality_gap_event_to_csv_row(
-        pkt,
-        sample_index=5,
-        missing_before=2,
-        total_missing=7,
+def test_raw_recording_outputs_only_timeline_csv_and_status_csv():
+    raw_path, status_path = raw_data_panel.recording_output_paths(
+        Path("multi_tiaosheng1.csv")
     )
 
-    assert raw_data_panel.QUALITY_EVENTS_CSV_HEADER == [
-        "EventTime(s)",
-        "EventType",
-        "GapStartSampleIndex",
-        "GapLen",
-        "NextSeq",
-        "PcMissingRaw",
-    ]
-    assert row == [0.03, "seq_gap", 3, 2, 42, 7]
+    assert raw_path == Path("multi_tiaosheng1.csv")
+    assert status_path == Path("multi_tiaosheng1_status.csv")
 
 
 def test_status_summary_exposes_diagnostic_counters():
@@ -171,6 +168,33 @@ def test_status_summary_exposes_diagnostic_counters():
     assert "Err 2" in text
     assert "PCGap 0" in text
     assert "FIFO 5/6" in text
+
+
+def test_status_summary_uses_chinese_labels_in_chinese_mode():
+    status = protocol.StatusPacket(
+        protocol_version=1,
+        mcu_time_ms=1234,
+        sample_counter=100,
+        adc_drdy_counter=400,
+        frame_counter=99,
+        tx_start_counter=98,
+        tx_done_counter=97,
+        tx_busy_counter=7,
+        tx_error_counter=2,
+        adc_error_counter=3,
+        imu_error_counter=4,
+        ppg_fifo_empty_counter=5,
+        ppg_fifo_overflow_counter=6,
+    )
+    snapshot = raw_data_panel.RawQualityStats().observe_status(status)
+
+    text = raw_data_panel.status_packet_to_summary(status, snapshot, lang="zh")
+
+    assert "发送忙 7" in text
+    assert "发送错误 2" in text
+    assert "发送后缺口 0" in text
+    assert "FIFO空/溢出 5/6" in text
+    assert "Busy" not in text
 
 
 def test_status_csv_row_exports_diagnostic_snapshot():

@@ -11,8 +11,8 @@ def test_raw_data_file_structure_doc_describes_all_recording_outputs():
     for filename in [
         "raw_data_YYYYMMDD_HHMMSS.csv",
         "raw_data_YYYYMMDD_HHMMSS_status.csv",
-        "raw_data_YYYYMMDD_HHMMSS_timeline.csv",
-        "raw_data_YYYYMMDD_HHMMSS_quality_events.csv",
+        "ValidFlag",
+        "GapLen",
     ]:
         assert filename in text
 

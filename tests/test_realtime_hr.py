@@ -30,6 +30,14 @@ def test_estimate_green_fft_hr_returns_resting_bpm_from_clean_green_ppg():
     assert estimate.window_seconds == 8.0
 
 
+def test_estimate_green_fft_hr_accepts_bpm_below_60():
+    estimate = estimate_green_fft_hr(_sine_ppg(48.0))
+
+    assert estimate.ready is True
+    assert estimate.bpm is not None
+    assert abs(estimate.bpm - 48.0) < 1.0
+
+
 def test_estimate_green_fft_hr_waits_for_full_window():
     estimate = estimate_green_fft_hr(_sine_ppg(72.0, seconds=4.0))
 

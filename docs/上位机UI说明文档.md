@@ -93,7 +93,7 @@ python tools/monitor/main.py --raw-simulate
 
 原始数据面板顶部信息条新增 `实时心率/Realtime HR`: 每 1 秒从绿光 PPG 缓冲区取最近 8 秒数据执行轻量纯 FFT 估计，仅用于静息采集时快速判断佩戴位置与绿光信号是否可解算。该计算不进入串口读取线程，也不在逐包 CSV 写入路径中执行；界面同步显示单次计算耗时 `Calc xx ms`，便于观察算法开销。
 
-原始数据面板顶部信息条新增 `Diag`: 显示固件 1Hz STATUS 帧中的关键链路诊断摘要，格式为 `Busy x | Err y | PCGap z | FIFO empty/overflow`。该信息用于判断缺失更可能来自 UART/DMA busy、发送错误、PC 端未收到或 PPG FIFO 空读/溢出。
+原始数据面板顶部信息条新增 `诊断/Diag`: 显示固件 1Hz STATUS 帧中的关键链路诊断摘要。中文模式显示 `发送忙 x | 发送错误 y | 发送后缺口 z | FIFO空/溢出 empty/overflow`，英文模式显示 `Busy x | Err y | PCGap z | FIFO empty/overflow`。该信息用于判断缺失更可能来自 UART/DMA busy、发送错误、PC 端未收到或 PPG FIFO 空读/溢出。
 
 ### 2.6 状态栏
 
@@ -111,10 +111,9 @@ python tools/monitor/main.py --raw-simulate
 - 时间列采用相对时间 (从录制开始的第一个数据包计，单位秒，精度毫秒)
 - 再次点击按钮停止录制，数据自动写入之前选择的 CSV 文件
 - 原始数据面板录制: 逐包实时写入 CSV，每 100 包刷盘一次 (避免 GUI 线程阻塞导致丢包)
-- 原始数据面板 `Time(s)` 按 100Hz 样本序号生成，不再使用 UI 主线程处理时间，避免串口/绘图批处理导致时间戳跳变
-- 原始数据面板 CSV 新增 `Seq` 和 `MissingBefore`: `Seq` 为固件侧 Raw 采样序号, `MissingBefore` 为该包前由序号缺口推断的缺失样本数
-- 原始数据面板录制会同时生成同名 `_status.csv`: 记录 1Hz STATUS 计数器快照、PC 端 Raw 接收/缺失统计、Raw 候选帧解析统计和 `PCMissingAfterTxDone`，用于采集后诊断链路瓶颈
-- 原始数据面板录制还会生成同名 `_timeline.csv` 和 `_quality_events.csv`: 前者按 100Hz 设备样本轴显式展开缺失样本，缺失值写 `NaN`; 后者记录每个序号 gap 的起点、长度和累计缺失数
+- 原始数据面板录制只生成两个 CSV：无后缀主 Raw CSV 和同名 `_status.csv`
+- 无后缀主 Raw CSV 默认按 100Hz 设备样本轴展开；真实样本 `ValidFlag=1`，若仍有缺失则插入 `ValidFlag=0` 且传感器字段为 `NaN` 的占位行
+- `_status.csv`: 记录 1Hz STATUS 计数器快照、PC 端 Raw 接收/缺失统计、Raw 候选帧解析统计和 `PCMissingAfterTxDone`，用于采集后诊断链路瓶颈
 - 串口读取线程采用 0.01s timeout + 最多 4 个 Raw 包的小块读取，避免 4096 字节读取造成约 124 包批量进入 UI
 
 ### 3.2 CSV 格式
@@ -203,19 +202,17 @@ CSV 列定义:
 ```
 
 链路质量评估:
-- `RX Hz`: PC 端每秒解析成功的 Raw 包数。
-- `DEV Hz`: 按 `Seq` 推断的设备侧 Raw 采样周期数, 正常应接近 100Hz。
+- `接收 Hz / RX Hz`: PC 端每秒解析成功的 Raw 包数。
+- `设备 Hz / DEV Hz`: 按 `Seq` 推断的设备侧 Raw 采样周期数, 正常应接近 100Hz。
 - `Loss`: `missing_count / expected_count`, 其中 `missing_count` 来自 `Seq` 缺口。
 - `MissingBefore`: CSV 中每个包前的缺失样本数。例如序号 11 后直接收到 15, 则序号 15 行的 `MissingBefore=3`。
-- `Time(s)`: 阶段 C 起按设备样本轴生成，即收到包对应的期望样本位置 `/100Hz`，不再按已接收行号压缩。发生丢包后，Raw CSV 仍只含真实收到行，但时间会跳过缺失段。
+- `Time(s)`: 按设备样本轴生成，即样本位置 `/100Hz`，不再按已接收行号压缩。发生丢包后，Raw CSV 会插入 `NaN` 占位行保持时间轴连续。
 
-### 3.3 时间轴补救文件
+### 3.3 Raw 时间轴补齐
 
-阶段 C 起，录制时额外生成：
+当前无后缀主 Raw CSV 已经合并原 `_timeline.csv` 的功能，按 100Hz 设备样本轴展开。真实样本行 `ValidFlag=1, InterpFlag=0`; 缺失样本行 `ValidFlag=0, InterpFlag=0`, 传感器值写 `NaN`, `GapLen` 记录该缺失段长度。当前不自动插值。
 
-- `_timeline.csv`: 按 100Hz 设备样本轴展开。真实样本行 `ValidFlag=1, InterpFlag=0`; 缺失样本行 `ValidFlag=0, InterpFlag=0`, 传感器值写 `NaN`, `GapLen` 记录该缺失段长度。当前 BLE 周期性 30-50 样本 gap 不自动插值。
-- `_quality_events.csv`: 每个序号缺口记录一行 `seq_gap`, 包含 `GapStartSampleIndex`, `GapLen`, `NextSeq`, `PcMissingRaw`。后处理和心率窗口可据此跳过低可信区间。
-- 详细文件构成和 NaN 占空语义见 `docs/raw_data_file_structure.md`。
+不再生成 `_timeline.csv` 和 `_quality_events.csv`。详细文件构成和 NaN 占空语义见 `docs/蓝牙数据缺失问题/raw_data_file_structure.md`。
 
 ### 5.3 Raw 链路诊断 STATUS 包 (53 字节, 1Hz, 帧头 0xAA 0xDD)
 
@@ -317,14 +314,15 @@ tools/monitor/
 | 2026-04-18 | UI优化: 1)录制按钮旁新增保存路径设置(默认桌面, 点击录制直接开始无需选路径); 2)修复数据录制丢包(移除逐包flush改为每100包刷盘, 串口读取缓冲区从128字节增至4096); 3)绘图性能优化(启用pyqtgraph裁剪视图+自动降采样, 刷新频率从20FPS降至15FPS) |
 | 2026-04-18 | 绘图流畅度优化: 缓冲区翻倍至2000点, 可见窗口缩减为800点(8秒), 每帧渲染量-20%; 刷新率提升至30FPS(33ms); 信息条从逐包(100Hz)降频为按帧率(30FPS)更新, 消除冗余QLabel重绘 |
 | 2026-04-24 | 原始数据录制缺点排查修复: 串口读取由 4096 字节大块读取改为低延迟小块读取; Raw CSV 时间列改为按 100Hz 样本序号生成，消除批处理造成的时间戳跳变和点击录制尾部时延 |
-| 2026-04-24 | Raw链路质量评估: 原始数据包扩展为35字节, 新增固件侧 `Seq`; 上位机显示 `RX Hz/DEV Hz/Loss`, CSV新增 `Seq` 与 `MissingBefore` |
+| 2026-04-24 | Raw链路质量评估: 原始数据包扩展为35字节, 新增固件侧 `Seq`; 上位机显示 `接收/RX Hz`、`设备/DEV Hz` 和 `Loss`, CSV新增 `Seq` 与 `MissingBefore` |
 | 2026-04-26 | 原始数据面板新增绿光 PPG 实时纯 FFT 心率估计: 8 秒窗口、1Hz 更新、显示计算耗时; 计算从已有缓冲读取，不影响串口解析和 Raw CSV 逐包保存链路 |
-| 2026-04-30 | Raw链路诊断第一阶段: 新增 53 字节 STATUS 包 (`0xAA 0xDD`) 与 `StatusPacket` 解析; Raw 面板显示 `Diag` 摘要; 录制时同步生成 `_status.csv`，用于采集后定位 MCU 采样/组帧/UART DMA/PC 接收解析问题 |
+| 2026-04-30 | Raw链路诊断第一阶段: 新增 53 字节 STATUS 包 (`0xAA 0xDD`) 与 `StatusPacket` 解析; Raw 面板显示 `诊断/Diag` 摘要; 录制时同步生成 `_status.csv`，用于采集后定位 MCU 采样/组帧/UART DMA/PC 接收解析问题 |
 | 2026-04-30 | 阶段B首次采集反馈修正: `PCMissingAfterTxDone` 改为基线增量计算; 固件 STATUS 改为 Raw DMA 完成后顺带发送，避免 1Hz STATUS 抢占 DMA 造成系统性 `HAL_BUSY` |
 | 2026-04-30 | 阶段B第二次采集反馈: `_status.csv` 新增 PC 端 Raw 候选帧解析统计列，用于区分“字节到达但解析/校验失败”和“下游链路未形成候选帧” |
-| 2026-05-01 | 阶段C时间轴补救: Raw CSV 时间改为设备样本轴; 新增 `_timeline.csv` 显式 NaN 缺失行和 `_quality_events.csv` gap 事件; BLE 中长 gap 不自动插值 |
+| 2026-05-12 | Raw录制文件简化: 无后缀主 CSV 合并时间轴补齐和 NaN 缺失行，只额外保留 `_status.csv`; 实时绿光 FFT 心率搜索下限降至 0.7Hz |
+| 2026-05-12 | 原始数据面板初始标签中文化: `_build_info_bar` 中 Mode/Loss/Packets 初始占位文本改为中文，与默认 zh 语言一致 |
 
 ---
 
-**最后更新**: 2026-04-30
+**最后更新**: 2026-05-12
 **对应分支**: main
