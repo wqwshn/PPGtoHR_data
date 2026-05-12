@@ -256,12 +256,15 @@ def test_firmware_schedules_status_after_raw_dma_completion():
 
 
 def test_firmware_enables_ble_init_with_config_commands():
-    assert "#define ENABLE_BLE_CONFIG" in MAIN_H
+    assert "#define ENABLE_BLE_CONFIG       0" in MAIN_H
     assert "static void BLE_Init(void);" in MAIN_C
     assert "#if (ENABLE_BLE_CONFIG)" in MAIN_C
     assert "BLE_Init();" in MAIN_C
     assert "#if 0\nstatic void BLE_Init(void)" not in MAIN_C
+    assert "#endif /* ENABLE_BLE_CONFIG */" in MAIN_C
     expected_commands = [
+        "<ST_FACTORY>",
+        "<ST_CLEAR_SECRET>",
         "<ST_WAKE=FOREVER>",
         "<ST_TX_POWER=+2.5>",
         "<ST_NAME=HJ-131-LYX>",
@@ -288,7 +291,7 @@ def test_firmware_resets_hj131_before_ble_config():
 
     reset_assert = "HAL_GPIO_WritePin(BLE_RST_GPIO_Port, BLE_RST_Pin, GPIO_PIN_SET);"
     reset_release = "HAL_GPIO_WritePin(BLE_RST_GPIO_Port, BLE_RST_Pin, GPIO_PIN_RESET);"
-    first_command = "BLE_SendConfigCommand(CMD_WAKE"
+    first_command = "BLE_SendConfigCommand(CMD_FACTORY"
 
     assert "BLE_ResetModule();" in ble_init
     assert ble_init.index("BLE_ResetModule();") < ble_init.index(first_command)
@@ -297,6 +300,39 @@ def test_firmware_resets_hj131_before_ble_config():
     assert ble_reset.index(reset_assert) < ble_reset.index(reset_release)
     assert "HAL_Delay(100);" in ble_reset
     assert "HAL_Delay(300);" in ble_reset
+
+
+def test_firmware_handles_factory_default_19200_before_runtime_config():
+    ble_init = MAIN_C.split("static void BLE_Init(void)\n{", 1)[1].split(
+        "static void BLE_ResetModule", 1
+    )[0]
+
+    ordered_commands = [
+        "BLE_ResetModule();",
+        "BLE_SendConfigCommand(CMD_FACTORY",
+        "BLE_SetUartBaud(19200);",
+        "BLE_ResetModule();",
+        "BLE_SendConfigCommand(CMD_FACTORY",
+        "BLE_ResetModule();",
+        "BLE_SendConfigCommand(CMD_CLEAR_SECRET",
+        "BLE_SendConfigCommand(CMD_WAKE",
+        "BLE_SendConfigCommand(CMD_TX_POWER",
+        "BLE_SendConfigCommand(CMD_NAME",
+        "BLE_SendConfigCommand(CMD_MIN_GAP",
+        "BLE_SendConfigCommand(CMD_BAUD",
+        "BLE_SetUartBaud(115200);",
+    ]
+    search_start = 0
+    positions = []
+    for command in ordered_commands:
+        position = ble_init.index(command, search_start)
+        positions.append(position)
+        search_start = position + len(command)
+
+    assert positions == sorted(positions)
+    assert "static void BLE_SetUartBaud(uint32_t baud_rate);" in MAIN_C
+    assert "huart2.Init.BaudRate = baud_rate;" in MAIN_C
+    assert "<ST_SECRET=" not in ble_init
 
 
 def test_firmware_ble_debug_readback_is_removed():

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "raw_data_file_structure.md"
+DOC = ROOT / "docs" / "蓝牙数据缺失问题" / "raw_data_file_structure.md"
 
 
 def test_raw_data_file_structure_doc_describes_all_recording_outputs():

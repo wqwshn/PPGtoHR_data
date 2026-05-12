@@ -119,9 +119,12 @@ static void PPG_Config_SpO2_Hardcoded(void);
 #endif
 static void PPG_Config_Green_Hardcoded(void);
 
+#if (ENABLE_BLE_CONFIG)
 static void BLE_Init(void);
 static void BLE_ResetModule(void);
 static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len);
+static void BLE_SetUartBaud(uint32_t baud_rate);
+#endif
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -642,8 +645,11 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 // 蓝牙配置。当前硬件调试口与 BLE 共用 UART, 不在固件内读回应答。
+#if (ENABLE_BLE_CONFIG)
 static void BLE_Init(void)
 {
+    static const uint8_t CMD_FACTORY[]     = "<ST_FACTORY>";
+    static const uint8_t CMD_CLEAR_SECRET[] = "<ST_CLEAR_SECRET>";
     static const uint8_t CMD_WAKE[]        = "<ST_WAKE=FOREVER>";
     static const uint8_t CMD_TX_POWER[]    = "<ST_TX_POWER=+2.5>";
     static const uint8_t CMD_NAME[]        = "<ST_NAME=HJ-131-LYX>";
@@ -657,11 +663,27 @@ static void BLE_Init(void)
     HAL_UART_Transmit(&huart2, wakeup_seq, sizeof(wakeup_seq), 100);
     HAL_Delay(50);
 
+    BLE_SendConfigCommand(CMD_FACTORY, sizeof(CMD_FACTORY) - 1);
+    HAL_Delay(500);
+    BLE_SetUartBaud(19200);
+    BLE_ResetModule();
+    HAL_UART_Transmit(&huart2, wakeup_seq, sizeof(wakeup_seq), 100);
+    HAL_Delay(50);
+
+    BLE_SendConfigCommand(CMD_FACTORY, sizeof(CMD_FACTORY) - 1);
+    HAL_Delay(500);
+    BLE_ResetModule();
+    HAL_UART_Transmit(&huart2, wakeup_seq, sizeof(wakeup_seq), 100);
+    HAL_Delay(50);
+
+    BLE_SendConfigCommand(CMD_CLEAR_SECRET, sizeof(CMD_CLEAR_SECRET) - 1);
     BLE_SendConfigCommand(CMD_WAKE, sizeof(CMD_WAKE) - 1);
     BLE_SendConfigCommand(CMD_TX_POWER, sizeof(CMD_TX_POWER) - 1);
     BLE_SendConfigCommand(CMD_NAME, sizeof(CMD_NAME) - 1);
-    BLE_SendConfigCommand(CMD_BAUD, sizeof(CMD_BAUD) - 1);
     BLE_SendConfigCommand(CMD_MIN_GAP, sizeof(CMD_MIN_GAP) - 1);
+    BLE_SendConfigCommand(CMD_BAUD, sizeof(CMD_BAUD) - 1);
+    HAL_Delay(100);
+    BLE_SetUartBaud(115200);
 }
 
 static void BLE_ResetModule(void)
@@ -679,6 +701,19 @@ static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len)
 }
 
 // 校验函数
+// BLE factory reset falls back to 19200bps; switch MCU UART before continuing config.
+static void BLE_SetUartBaud(uint32_t baud_rate)
+{
+    HAL_UART_DeInit(&huart2);
+    huart2.Init.BaudRate = baud_rate;
+    if (HAL_UART_Init(&huart2) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+#endif /* ENABLE_BLE_CONFIG */
+
+// XOR check helper.
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len)
 {
   uint8_t i = 0;
