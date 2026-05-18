@@ -33,6 +33,8 @@ PPG_Channel_t PPG_GetChannel(void)
  */
 void PPG_Init(void)
 {
+    if (g_ppg_channel == PPG_CH_NONE)
+        return;
     if (g_ppg_channel == PPG_CH2)
         MAX30101_2_Init();
     else
@@ -45,6 +47,8 @@ void PPG_Init(void)
  */
 uint8_t PPG_Check(void)
 {
+    if (g_ppg_channel == PPG_CH_NONE)
+        return 0;
     if (g_ppg_channel == PPG_CH2)
         return MAX2_Check();
     else
@@ -58,6 +62,9 @@ uint8_t PPG_Check(void)
  */
 uint8_t PPG_ReadOneByte(uint16_t addr)
 {
+    (void)addr;
+    if (g_ppg_channel == PPG_CH_NONE)
+        return 0;
     if (g_ppg_channel == PPG_CH2)
         return MAX2_ReadOneByte(addr);
     else
@@ -71,6 +78,10 @@ uint8_t PPG_ReadOneByte(uint16_t addr)
  */
 void PPG_WriteOneByte(uint16_t addr, uint8_t data)
 {
+    (void)addr;
+    (void)data;
+    if (g_ppg_channel == PPG_CH_NONE)
+        return;
     if (g_ppg_channel == PPG_CH2)
         MAX2_WriteOneByte(addr, data);
     else
@@ -84,6 +95,11 @@ void PPG_WriteOneByte(uint16_t addr, uint8_t data)
  */
 void PPG_ReadFIFO_Burst(uint8_t *buf, uint8_t len)
 {
+    if (g_ppg_channel == PPG_CH_NONE) {
+        for (uint8_t i = 0; i < len; i++)
+            buf[i] = 0;
+        return;
+    }
     if (g_ppg_channel == PPG_CH2)
         MAX2_ReadFIFO_Burst(buf, len);
     else

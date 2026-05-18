@@ -27,8 +27,9 @@ extern "C" {
 /* Exported types ------------------------------------------------------------*/
 /* PPG通道枚举 */
 typedef enum {
-    PPG_CH1 = 1,  // 通道1: MAX30101 (IIC1)
-    PPG_CH2 = 2   // 通道2: MAX30101_2 (IIC2)
+    PPG_CH_NONE = 0,  // 禁用PPG: 不初始化, 数据占空发送
+    PPG_CH1 = 1,      // 通道1: MAX30101 (IIC1)
+    PPG_CH2 = 2       // 通道2: MAX30101_2 (IIC2)
 } PPG_Channel_t;
 
 /* Exported constants --------------------------------------------------------*/
