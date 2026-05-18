@@ -212,7 +212,7 @@ CSV 列定义:
 
 当前无后缀主 Raw CSV 已经合并原 `_timeline.csv` 的功能，按 100Hz 设备样本轴展开。真实样本行 `ValidFlag=1, InterpFlag=0`; 缺失样本行 `ValidFlag=0, InterpFlag=0`, 传感器值写 `NaN`, `GapLen` 记录该缺失段长度。当前不自动插值。
 
-不再生成 `_timeline.csv` 和 `_quality_events.csv`。详细文件构成和 NaN 占空语义见 `docs/蓝牙数据缺失问题/raw_data_file_structure.md`。
+不再生成 `_timeline.csv` 和 `_quality_events.csv`。详细文件构成和 NaN 占空语义见 `docs/原始数据录制文件结构说明.md`。
 
 ### 5.3 Raw 链路诊断 STATUS 包 (53 字节, 1Hz, 帧头 0xAA 0xDD)
 
@@ -321,8 +321,9 @@ tools/monitor/
 | 2026-04-30 | 阶段B第二次采集反馈: `_status.csv` 新增 PC 端 Raw 候选帧解析统计列，用于区分“字节到达但解析/校验失败”和“下游链路未形成候选帧” |
 | 2026-05-12 | Raw录制文件简化: 无后缀主 CSV 合并时间轴补齐和 NaN 缺失行，只额外保留 `_status.csv`; 实时绿光 FFT 心率搜索下限降至 0.7Hz |
 | 2026-05-12 | 原始数据面板初始标签中文化: `_build_info_bar` 中 Mode/Loss/Packets 初始占位文本改为中文，与默认 zh 语言一致 |
+| 2026-05-18 | 曲线标题实时显示最近10点平均值(精度1位小数, 33ms刷新); 新增 Marker 标记按钮, 录制时点击生成 `_markers.csv` 同步记录, 按钮显示累计次数 |
 
 ---
 
-**最后更新**: 2026-05-12
+**最后更新**: 2026-05-18
 **对应分支**: main

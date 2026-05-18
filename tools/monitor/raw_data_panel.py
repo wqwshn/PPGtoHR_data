@@ -67,8 +67,12 @@ def sample_index_to_elapsed_seconds(
     return round(sample_index / sample_rate_hz, 3)
 
 
-def recording_output_paths(raw_path: Path) -> tuple[Path, Path]:
-    return raw_path, raw_path.with_name(f"{raw_path.stem}_status{raw_path.suffix}")
+def recording_output_paths(raw_path: Path) -> tuple[Path, Path, Path]:
+    return (
+        raw_path,
+        raw_path.with_name(f"{raw_path.stem}_status{raw_path.suffix}"),
+        raw_path.with_name(f"{raw_path.stem}_markers{raw_path.suffix}"),
+    )
 
 
 def raw_packet_to_csv_row(pkt: RawDataPacket, elapsed: float, missing_before: int) -> list:
@@ -238,6 +242,9 @@ class RawDataPanel(QWidget):
         self._csv_writer = None
         self._status_csv_file = None
         self._status_csv_writer = None
+        self._marker_csv_file = None
+        self._marker_csv_writer = None
+        self._marker_count = 0
         self._recording_start_time: Optional[float] = None
         self._recorded_sample_count = 0
         self._flush_counter = 0
@@ -285,6 +292,7 @@ class RawDataPanel(QWidget):
         self._plot_ppg_g, self._curve_ppg_g = self._make_plot(
             "PPG Green", COLOR_GREEN
         )
+        self._plot_ppg_g._base_title = "PPG Green"
         ppg_layout.addWidget(self._plot_ppg_g, 1)
 
         # 右侧: 红光 + 红外 上下排列
@@ -293,7 +301,9 @@ class RawDataPanel(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(6)
         self._plot_ppg_r, self._curve_ppg_r = self._make_plot("PPG Red", COLOR_RED)
+        self._plot_ppg_r._base_title = "PPG Red"
         self._plot_ppg_ir, self._curve_ppg_ir = self._make_plot("PPG IR", "#3B82F6")
+        self._plot_ppg_ir._base_title = "PPG IR"
         right_layout.addWidget(self._plot_ppg_r)
         right_layout.addWidget(self._plot_ppg_ir)
         ppg_layout.addWidget(right, 1)
@@ -306,7 +316,9 @@ class RawDataPanel(QWidget):
         ut_layout.setContentsMargins(0, 0, 0, 0)
         ut_layout.setSpacing(6)
         self._plot_Ut1, self._curve_Ut1 = self._make_plot("Ut1 (mV)", COLOR_ORANGE)
+        self._plot_Ut1._base_title = "Ut1 (mV)"
         self._plot_Ut2, self._curve_Ut2 = self._make_plot("Ut2 (mV)", "#D946EF")
+        self._plot_Ut2._base_title = "Ut2 (mV)"
         ut_layout.addWidget(self._plot_Ut1)
         ut_layout.addWidget(self._plot_Ut2)
         layout.addWidget(ut_widget, 2)
@@ -317,7 +329,9 @@ class RawDataPanel(QWidget):
         uc_layout.setContentsMargins(0, 0, 0, 0)
         uc_layout.setSpacing(6)
         self._plot_Uc1, self._curve_Uc1 = self._make_plot("Uc1 (mV)", COLOR_RED)
+        self._plot_Uc1._base_title = "Uc1 (mV)"
         self._plot_Uc2, self._curve_Uc2 = self._make_plot("Uc2 (mV)", "#3B82F6")
+        self._plot_Uc2._base_title = "Uc2 (mV)"
         uc_layout.addWidget(self._plot_Uc1)
         uc_layout.addWidget(self._plot_Uc2)
         layout.addWidget(uc_widget, 1)
@@ -332,6 +346,7 @@ class RawDataPanel(QWidget):
         self._plot_acc, self._curve_accx = self._make_plot("ACC (g)", COLOR_RED)
         self._curve_accy = self._plot_acc.plot(pen=pg.mkPen(COLOR_GREEN, width=1.5))
         self._curve_accz = self._plot_acc.plot(pen=pg.mkPen("#3B82F6", width=1.5))
+        self._plot_acc._base_title = "ACC (g)"
         self._plot_acc.addLegend(offset=(60, 10))
         imu_layout.addWidget(self._plot_acc)
 
@@ -339,6 +354,7 @@ class RawDataPanel(QWidget):
         self._plot_gyro, self._curve_gyrox = self._make_plot("GYRO (dps)", COLOR_RED)
         self._curve_gyroy = self._plot_gyro.plot(pen=pg.mkPen(COLOR_GREEN, width=1.5))
         self._curve_gyroz = self._plot_gyro.plot(pen=pg.mkPen("#3B82F6", width=1.5))
+        self._plot_gyro._base_title = "GYRO (dps)"
         self._plot_gyro.addLegend(offset=(60, 10))
         imu_layout.addWidget(self._plot_gyro)
 
@@ -528,9 +544,59 @@ class RawDataPanel(QWidget):
         self._curve_gyroy.setData(list(self._data_Gyroy)[-VISIBLE_POINTS:])
         self._curve_gyroz.setData(list(self._data_Gyroz)[-VISIBLE_POINTS:])
 
+        # 刷新各曲线标题的最近10点平均值
+        self._refresh_avg_titles()
+
         # 信息条按帧率更新
         if self._last_pkt is not None:
             self._update_info_bar(self._last_pkt)
+
+    @staticmethod
+    def _last_n_avg(deq, n=10):
+        if not deq:
+            return 0.0
+        window = list(deq)[-n:]
+        return sum(window) / len(window)
+
+    def _refresh_avg_titles(self):
+        """更新各 plot 标题, 在曲线名称后追加最近10点平均值"""
+        dim = COLOR_TEXT_DIM
+        # 单通道曲线: 标题格式 "名称  avg:值"
+        for plot, deq in (
+            (self._plot_ppg_g, self._data_ppg_g),
+            (self._plot_ppg_r, self._data_ppg_r),
+            (self._plot_ppg_ir, self._data_ppg_ir),
+            (self._plot_Ut1, self._data_Ut1),
+            (self._plot_Ut2, self._data_Ut2),
+            (self._plot_Uc1, self._data_Uc1),
+            (self._plot_Uc2, self._data_Uc2),
+        ):
+            avg = self._last_n_avg(deq)
+            title = (
+                f"{plot._base_title}"
+                f"<span style='color:{dim};font-size:9pt'>  avg:{avg:.1f}</span>"
+            )
+            plot.setTitle(title, color=dim, size="10pt")
+
+        # ACC 三轴: 标题格式 "ACC (g)  X:值 Y:值 Z:值"
+        ax = self._last_n_avg(self._data_Accx)
+        ay = self._last_n_avg(self._data_Accy)
+        az = self._last_n_avg(self._data_Accz)
+        self._plot_acc.setTitle(
+            f"{self._plot_acc._base_title}"
+            f"<span style='color:{dim};font-size:9pt'>  X:{ax:.3f} Y:{ay:.3f} Z:{az:.3f}</span>",
+            color=dim, size="10pt",
+        )
+
+        # GYRO 三轴: 标题格式 "GYRO (dps)  X:值 Y:值 Z:值"
+        gx = self._last_n_avg(self._data_Gyrox)
+        gy = self._last_n_avg(self._data_Gyroy)
+        gz = self._last_n_avg(self._data_Gyroz)
+        self._plot_gyro.setTitle(
+            f"{self._plot_gyro._base_title}"
+            f"<span style='color:{dim};font-size:9pt'>  X:{gx:.1f} Y:{gy:.1f} Z:{gz:.1f}</span>",
+            color=dim, size="10pt",
+        )
 
     def _update_sample_rate(self):
         """1秒定时器: 刷新采样率"""
@@ -587,13 +653,17 @@ class RawDataPanel(QWidget):
                 save_dir = Path.home() / "Desktop"
             save_dir.mkdir(parents=True, exist_ok=True)
             path = save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            raw_path, status_path = recording_output_paths(path)
+            raw_path, status_path, marker_path = recording_output_paths(path)
             self._csv_file = open(raw_path, "w", newline="", encoding="utf-8-sig")
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow(RAW_CSV_HEADER)
             self._status_csv_file = open(status_path, "w", newline="", encoding="utf-8-sig")
             self._status_csv_writer = csv.writer(self._status_csv_file)
             self._status_csv_writer.writerow(STATUS_CSV_HEADER)
+            self._marker_csv_file = open(marker_path, "w", newline="", encoding="utf-8-sig")
+            self._marker_csv_writer = csv.writer(self._marker_csv_file)
+            self._marker_csv_writer.writerow(["Elapsed(s)", "SampleIndex", "MarkerNo", "Note"])
+            self._marker_count = 0
             self._recording_start_time = time.time()
             self._recorded_sample_count = 0
             self._reset_quality_stats()
@@ -617,8 +687,31 @@ class RawDataPanel(QWidget):
             self._status_csv_file.close()
             self._status_csv_file = None
             self._status_csv_writer = None
+        if self._marker_csv_file:
+            self._marker_csv_file.flush()
+            self._marker_csv_file.close()
+            self._marker_csv_file = None
+            self._marker_csv_writer = None
+        self._marker_count = 0
         self._recording_start_time = None
         self._recorded_sample_count = 0
+
+    def add_marker(self, note: str = ""):
+        """录制时记录一个 marker 标记点, 与原始数据时间轴同步"""
+        if not self._is_recording or self._marker_csv_writer is None:
+            return
+        self._marker_count += 1
+        elapsed = time.time() - (self._recording_start_time or time.time())
+        sample_index = max(self._quality.expected_count - 1, 0)
+        self._marker_csv_writer.writerow([
+            f"{elapsed:.3f}", sample_index,
+            self._marker_count, note,
+        ])
+        self._marker_csv_file.flush()
+
+    @property
+    def marker_count(self) -> int:
+        return self._marker_count
 
     @property
     def is_recording(self) -> bool:
@@ -692,33 +785,16 @@ class RawDataPanel(QWidget):
             self._lbl_diag.setText(f"{t.get('diag', 'Diag')}: --")
 
         # 更新图表标题
-        self._plot_ppg_g.setTitle(
-            t.get("ppg_green", "PPG Green"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_ppg_r.setTitle(
-            t.get("ppg_red", "PPG Red"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_ppg_ir.setTitle(
-            t.get("ppg_ir", "PPG IR"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_Ut1.setTitle(
-            t.get("bridge_top", "Ut1 (mV)"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_Ut2.setTitle(
-            t.get("bridge_top", "Ut2 (mV)"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_Uc1.setTitle(
-            t.get("bridge_mid", "Uc1 (mV)"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_Uc2.setTitle(
-            t.get("bridge_mid", "Uc2 (mV)"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_acc.setTitle(
-            t.get("acceleration", "ACC (g)"), color=COLOR_TEXT_DIM, size="10pt"
-        )
-        self._plot_gyro.setTitle(
-            "GYRO (dps)", color=COLOR_TEXT_DIM, size="10pt"
-        )
+        self._plot_ppg_g._base_title = t.get("ppg_green", "PPG Green")
+        self._plot_ppg_r._base_title = t.get("ppg_red", "PPG Red")
+        self._plot_ppg_ir._base_title = t.get("ppg_ir", "PPG IR")
+        self._plot_Ut1._base_title = t.get("bridge_top", "Ut1 (mV)")
+        self._plot_Ut2._base_title = t.get("bridge_top", "Ut2 (mV)")
+        self._plot_Uc1._base_title = t.get("bridge_mid", "Uc1 (mV)")
+        self._plot_Uc2._base_title = t.get("bridge_mid", "Uc2 (mV)")
+        self._plot_acc._base_title = t.get("acceleration", "ACC (g)")
+        self._plot_gyro._base_title = "GYRO (dps)"
+        self._refresh_avg_titles()
 
     # ── 模拟模式 ─────────────────────────────────────────
 

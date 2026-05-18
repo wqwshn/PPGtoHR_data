@@ -62,6 +62,7 @@ TRANSLATIONS = {
         "clear": "清屏",
         "record": "录制",
         "stop": "停止",
+        "marker": "标记",
         "save": "保存",
         "select_save_path": "选择保存路径",
         "recording_to": "录制中 ->",
@@ -121,6 +122,7 @@ TRANSLATIONS = {
         "clear": "Clear",
         "record": "Record",
         "stop": "Stop",
+        "marker": "Mark",
         "save": "Save",
         "select_save_path": "Select Save Path",
         "recording_to": "Recording ->",
@@ -455,6 +457,19 @@ class MonitorWindow(QMainWindow):
         self._btn_save_path.clicked.connect(self._browse_save_dir)
         layout.addWidget(self._btn_save_path)
 
+        # 标记点
+        self._btn_marker = QPushButton(t["marker"])
+        self._btn_marker.setStyleSheet(f"""
+            QPushButton {{
+                background-color: #8B5CF6; color: white;
+                border: none; border-radius: 6px;
+                padding: 6px 16px; font-size: 13px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: #7C3AED; }}
+        """)
+        self._btn_marker.clicked.connect(self._add_marker_active)
+        layout.addWidget(self._btn_marker)
+
         # 录制
         self._btn_record = QPushButton(t["record"])
         self._btn_record.setObjectName("btn_record")
@@ -497,6 +512,7 @@ class MonitorWindow(QMainWindow):
     def _switch_panel(self, index: int):
         self._panel_stack.setCurrentIndex(index)
         self._update_record_button()
+        self._update_marker_button()
 
     def _update_record_button(self):
         """根据当前活动面板更新录制按钮外观"""
@@ -587,6 +603,23 @@ class MonitorWindow(QMainWindow):
             self._raw_panel._toggle_record(self._save_dir)
         self._update_record_button()
 
+    def _add_marker_active(self):
+        idx = self._panel_stack.currentIndex()
+        if idx == 0:
+            self._hr_panel.add_marker()
+        else:
+            self._raw_panel.add_marker()
+        self._update_marker_button()
+
+    def _update_marker_button(self):
+        t = TRANSLATIONS[self._lang]
+        idx = self._panel_stack.currentIndex()
+        cnt = self._hr_panel.marker_count if idx == 0 else self._raw_panel.marker_count
+        if cnt > 0:
+            self._btn_marker.setText(f"{t['marker']} ({cnt})")
+        else:
+            self._btn_marker.setText(t["marker"])
+
     def _toggle_language(self):
         self._lang = "en" if self._lang == "zh" else "zh"
         self._apply_language()
@@ -602,6 +635,7 @@ class MonitorWindow(QMainWindow):
         self._btn_hr_panel.setText(t["panel_hr"])
         self._btn_raw_panel.setText(t["panel_raw"])
         self._update_record_button()
+        self._update_marker_button()
         self._hr_panel._apply_language(self._lang)
         self._raw_panel._apply_language(self._lang)
         self._status_label.setText(t["disconnected"])
@@ -652,6 +686,7 @@ class HRPanel(QWidget):
         # 录制状态
         self._is_recording = False
         self._record_file_path: Optional[str] = None
+        self._marker_count = 0
 
         self._init_ui()
         self._init_plot()
@@ -660,6 +695,22 @@ class HRPanel(QWidget):
     @property
     def is_recording(self) -> bool:
         return self._is_recording
+
+    @property
+    def marker_count(self) -> int:
+        return self._marker_count
+
+    def add_marker(self, note: str = ""):
+        """录制时记录一个 marker 标记点"""
+        if not self._is_recording:
+            return
+        self._marker_count += 1
+        elapsed = time.time() - (self._recording_start or time.time())
+        self._recorded_data.append({
+            "type": "marker",
+            "elapsed": elapsed,
+            "note": note,
+        })
 
     # ── UI 构建 ──────────────────────────────────────────
 
@@ -903,6 +954,7 @@ class HRPanel(QWidget):
         self._is_recording = False
         self._record_file_path = None
         self._last_device_ts = -1
+        self._marker_count = 0
 
         self._curve.setData([], [])
         self._lbl_bpm.setText("--.-")
@@ -947,6 +999,7 @@ class HRPanel(QWidget):
             self._recorded_data.clear()
             self._recording_start = None
             self._is_recording = True
+            self._marker_count = 0
         else:
             self._is_recording = False
             if self._recorded_data and self._record_file_path:
