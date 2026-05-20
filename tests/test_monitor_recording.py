@@ -135,13 +135,14 @@ def test_timeline_csv_expands_missing_samples_as_nan_rows():
     ]
 
 
-def test_raw_recording_outputs_only_timeline_csv_and_status_csv():
-    raw_path, status_path = raw_data_panel.recording_output_paths(
+def test_raw_recording_outputs_timeline_status_and_marker_csv():
+    raw_path, status_path, marker_path = raw_data_panel.recording_output_paths(
         Path("multi_tiaosheng1.csv")
     )
 
     assert raw_path == Path("multi_tiaosheng1.csv")
     assert status_path == Path("multi_tiaosheng1_status.csv")
+    assert marker_path == Path("multi_tiaosheng1_markers.csv")
 
 
 def test_status_summary_exposes_diagnostic_counters():

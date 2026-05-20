@@ -120,7 +120,7 @@ void Error_Handler(void);
 #define ENABLE_BLE_CONFIG       0
 
 /* PPG 通道选择: 0=禁用PPG(占空发送), 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
-#define PPG_DEFAULT_CHANNEL     0
+#define PPG_DEFAULT_CHANNEL     2
 
 /* PPG 采样率 (Hz): 50 / 100 / 125
  * 50Hz:  内部 800sps / 16x 硬件平均 = 50sps

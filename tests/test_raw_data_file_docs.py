@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "蓝牙数据缺失问题" / "raw_data_file_structure.md"
+DOC = ROOT / "docs" / "原始数据录制文件结构说明.md"
 
 
 def test_raw_data_file_structure_doc_describes_all_recording_outputs():
@@ -22,6 +22,7 @@ def test_raw_data_file_structure_doc_explains_nan_placeholders():
 
     assert "NaN" in text
     assert "ValidFlag=0" in text
-    assert "InterpFlag=0" in text
+    assert "InterpFlag" in text
     assert "30-50" in text
-    assert "No automatic interpolation" in text
+    assert "丢包" in text
+    assert "缺失占位符" in text

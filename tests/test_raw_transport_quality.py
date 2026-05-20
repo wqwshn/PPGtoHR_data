@@ -103,6 +103,35 @@ def test_raw_quality_stats_handle_uint16_wraparound():
     assert stats.missing_count == 1
 
 
+def test_raw_quality_stats_rejects_duplicate_sequence_for_timeline():
+    stats = RawQualityStats()
+
+    assert stats.observe(23049) == 0
+    assert stats.observe(23049) == 0
+
+    assert stats.received_count == 2
+    assert stats.expected_count == 1
+    assert stats.missing_count == 0
+    assert stats.duplicate_count == 1
+    assert stats.latest_sequence_observation.accepted is False
+    assert stats.latest_sequence_observation.reason == "duplicate"
+
+
+def test_raw_quality_stats_rejects_small_backward_sequence_as_out_of_order():
+    stats = RawQualityStats()
+
+    assert stats.observe(25018) == 0
+    assert stats.observe(25016) == 0
+
+    assert stats.received_count == 2
+    assert stats.expected_count == 1
+    assert stats.missing_count == 0
+    assert stats.last_sequence == 25018
+    assert stats.out_of_order_count == 1
+    assert stats.latest_sequence_observation.accepted is False
+    assert stats.latest_sequence_observation.reason == "out_of_order"
+
+
 def test_status_packet_parses_diagnostic_counters():
     assert protocol.STATUS_HEADER_BYTE_1 == 0xDD
     assert protocol.STATUS_PACKET_LEN == 53

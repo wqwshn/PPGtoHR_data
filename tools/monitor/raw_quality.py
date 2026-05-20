@@ -6,6 +6,17 @@ from protocol import StatusPacket
 
 
 UINT16_MODULO = 0x10000
+UINT16_HALF_RANGE = UINT16_MODULO // 2
+
+
+@dataclass
+class SequenceObservation:
+    """Result of classifying one Raw sequence number."""
+
+    sequence: int = 0
+    missing_before: int = 0
+    accepted: bool = False
+    reason: str = ""
 
 
 @dataclass
@@ -30,6 +41,11 @@ class RawQualityStats:
     expected_count: int = 0
     missing_count: int = 0
     last_sequence: int | None = None
+    duplicate_count: int = 0
+    out_of_order_count: int = 0
+    latest_sequence_observation: SequenceObservation = field(
+        default_factory=SequenceObservation
+    )
     latest_status: StatusPacket | None = None
     latest_diagnostic: DiagnosticSnapshot = field(default_factory=DiagnosticSnapshot)
     _status_baseline_tx_done: int | None = None
@@ -43,6 +59,9 @@ class RawQualityStats:
         self.expected_count = 0
         self.missing_count = 0
         self.last_sequence = None
+        self.duplicate_count = 0
+        self.out_of_order_count = 0
+        self.latest_sequence_observation = SequenceObservation()
         self.latest_status = None
         self.latest_diagnostic = DiagnosticSnapshot()
         self._status_baseline_tx_done = None
@@ -58,17 +77,41 @@ class RawQualityStats:
         if self.last_sequence is None:
             self.last_sequence = sequence
             self.expected_count = 1
+            self.latest_sequence_observation = SequenceObservation(
+                sequence=sequence,
+                accepted=True,
+            )
             return 0
 
         delta = (sequence - self.last_sequence) % UINT16_MODULO
-        self.last_sequence = sequence
 
         if delta == 0:
+            self.duplicate_count += 1
+            self.latest_sequence_observation = SequenceObservation(
+                sequence=sequence,
+                accepted=False,
+                reason="duplicate",
+            )
+            return 0
+
+        if delta > UINT16_HALF_RANGE:
+            self.out_of_order_count += 1
+            self.latest_sequence_observation = SequenceObservation(
+                sequence=sequence,
+                accepted=False,
+                reason="out_of_order",
+            )
             return 0
 
         missing_before = delta - 1
+        self.last_sequence = sequence
         self.expected_count += delta
         self.missing_count += missing_before
+        self.latest_sequence_observation = SequenceObservation(
+            sequence=sequence,
+            missing_before=missing_before,
+            accepted=True,
+        )
         return missing_before
 
     def observe_parser_stats(self, raw_total: int, raw_invalid: int) -> None:

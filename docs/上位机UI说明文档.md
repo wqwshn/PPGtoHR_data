@@ -111,8 +111,9 @@ python tools/monitor/main.py --raw-simulate
 - 时间列采用相对时间 (从录制开始的第一个数据包计，单位秒，精度毫秒)
 - 再次点击按钮停止录制，数据自动写入之前选择的 CSV 文件
 - 原始数据面板录制: 逐包实时写入 CSV，每 100 包刷盘一次 (避免 GUI 线程阻塞导致丢包)
-- 原始数据面板录制只生成两个 CSV：无后缀主 Raw CSV 和同名 `_status.csv`
+- 原始数据面板录制生成三个 CSV：无后缀主 Raw CSV、同名 `_status.csv` 和 `_markers.csv`
 - 无后缀主 Raw CSV 默认按 100Hz 设备样本轴展开；真实样本 `ValidFlag=1`，若仍有缺失则插入 `ValidFlag=0` 且传感器字段为 `NaN` 的占位行
+- Raw `Seq` 仅在向前递增或 65535 后真实回绕时推进时间轴；重复 Seq 或小幅回退/乱序包会被计为异常并跳过，不再展开成 655xx 行 `NaN`
 - `_status.csv`: 记录 1Hz STATUS 计数器快照、PC 端 Raw 接收/缺失统计、Raw 候选帧解析统计和 `PCMissingAfterTxDone`，用于采集后诊断链路瓶颈
 - 串口读取线程采用 0.01s timeout + 最多 4 个 Raw 包的小块读取，避免 4096 字节读取造成约 124 包批量进入 UI
 
@@ -207,6 +208,7 @@ CSV 列定义:
 - `Loss`: `missing_count / expected_count`, 其中 `missing_count` 来自 `Seq` 缺口。
 - `MissingBefore`: CSV 中每个包前的缺失样本数。例如序号 11 后直接收到 15, 则序号 15 行的 `MissingBefore=3`。
 - `Time(s)`: 按设备样本轴生成，即样本位置 `/100Hz`，不再按已接收行号压缩。发生丢包后，Raw CSV 会插入 `NaN` 占位行保持时间轴连续。
+- 为避免把短距离乱序误判为 16 位回绕，PC 端只接受半个 uint16 周期以内的前向 `Seq` 差值。`delta > 32768` 的情况视为重复/乱序异常，不更新 `MissingBefore`，也不写入主 Raw CSV 时间轴。
 
 ### 3.3 Raw 时间轴补齐
 
@@ -320,6 +322,7 @@ tools/monitor/
 | 2026-04-30 | 阶段B首次采集反馈修正: `PCMissingAfterTxDone` 改为基线增量计算; 固件 STATUS 改为 Raw DMA 完成后顺带发送，避免 1Hz STATUS 抢占 DMA 造成系统性 `HAL_BUSY` |
 | 2026-04-30 | 阶段B第二次采集反馈: `_status.csv` 新增 PC 端 Raw 候选帧解析统计列，用于区分“字节到达但解析/校验失败”和“下游链路未形成候选帧” |
 | 2026-05-12 | Raw录制文件简化: 无后缀主 CSV 合并时间轴补齐和 NaN 缺失行，只额外保留 `_status.csv`; 实时绿光 FFT 心率搜索下限降至 0.7Hz |
+| 2026-05-20 | Raw Seq 异常保护: 重复 Seq 与小幅回退/乱序包不再按 `% 65536` 展开为大规模缺失，主 CSV 避免出现 655xx 行误判 `NaN` |
 | 2026-05-12 | 原始数据面板初始标签中文化: `_build_info_bar` 中 Mode/Loss/Packets 初始占位文本改为中文，与默认 zh 语言一致 |
 | 2026-05-18 | 曲线标题实时显示最近10点平均值(精度1位小数, 33ms刷新); 新增 Marker 标记按钮, 录制时点击生成 `_markers.csv` 同步记录, 按钮显示累计次数 |
 

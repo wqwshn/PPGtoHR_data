@@ -230,7 +230,7 @@ Timeline CSV 中的 `NaN` 表示"该样本索引没有收到有效传感器样�
 | `tools/monitor/protocol.py` | StatusPacket 解析、parse_status_packet() |
 | `tools/monitor/raw_quality.py` | RawQualityStats 序号缺口统计、STATUS 对照分析 |
 | `docs/raw_data_link_upgrade_plan.md` | 链路诊断与时间轴补救完整方案 |
-| `docs/raw_data_file_structure.md` | 录制文件构成说明 (raw/timeline/quality_events/status) |
+| `docs/原始数据录制文件结构说明.md` | 录制文件构成说明、字段语义与蓝牙丢包体现 |
 
 ---
 

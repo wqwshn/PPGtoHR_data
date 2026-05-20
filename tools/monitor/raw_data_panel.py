@@ -440,6 +440,8 @@ class RawDataPanel(QWidget):
         self._sample_count += 1
         self._packet_count += 1
         missing_before = self._quality.observe(pkt.sequence)
+        if not self._quality.latest_sequence_observation.accepted:
+            return
         self._last_missing_before = missing_before
 
         # 追加数据缓冲区
