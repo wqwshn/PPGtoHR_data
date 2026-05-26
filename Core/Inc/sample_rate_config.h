@@ -9,10 +9,10 @@
  *
  * 各模式 MAX30101 内部采样策略:
  *   50Hz  -> 内部 800sps / 16x 平均 = 50sps 有效输出
- *   100Hz -> 内部 800sps / 8x 平均  = 100sps 有效输出
+ *   100Hz -> 内部 1000sps / 8x 平均 = 125sps 有效输出 (MCU 100Hz 读取)
  *   125Hz -> 内部 1000sps / 4x 平均 = 250sps 有效输出 (MCU 125Hz 读取)
  *
- * 约束: 脉宽固定 411us (18-bit), 内部速率不超过 1000sps.
+ * 约束: 三光路 100Hz 默认使用 215us (17-bit), 内部速率不超过 1000sps.
  ******************************************************************************
  */
 
@@ -63,10 +63,10 @@
 #define MAX30101_SPO2_CONFIG_VAL    0x73
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* ADC=8192nA(10) | SR=800sps(100) | PW=215us(10) = 0x52
- * 三光路约束: 3 LEDs x 215us = 645us < 1250us (1/800sps)
- * 降至17-bit以满足三通道时序, ADC量程同步降至8192nA适配 */
-#define MAX30101_SPO2_CONFIG_VAL    0x52
+/* ADC=8192nA(10) | SR=1000sps(101) | PW=215us(10) = 0x56
+ * 三光路约束: 3 LEDs x 215us = 645us < 1000us (1/1000sps)
+ * 保持17-bit解包不变, 通过125sps传感器输出给100Hz轮询留FIFO裕量 */
+#define MAX30101_SPO2_CONFIG_VAL    0x56
 
 #elif (PPG_SAMPLE_RATE == 125)
 /* ADC=16384nA(011) | SR=1000sps(101) | PW=411us(11) = 0x77 */
@@ -99,7 +99,7 @@
 #define PPG_RATE_STR    "50Hz (800/16x, Multi-LED G+R+IR)"
 
 #elif (PPG_SAMPLE_RATE == 100)
-#define PPG_RATE_STR    "100Hz (800/8x, Multi-LED G+R+IR)"
+#define PPG_RATE_STR    "100Hz (1000/8x, Multi-LED G+R+IR)"
 
 #elif (PPG_SAMPLE_RATE == 125)
 #define PPG_RATE_STR    "125Hz (1000/4x)"
@@ -114,7 +114,7 @@
  *
  * 时隙约束: 3 x LED_PW < 1/内部采样率
  *   50Hz:  3 x 411us = 1233us < 1250us (1/800sps)  满足 OK
- *   100Hz: 3 x 215us = 645us  < 1250us (1/800sps)  满足 OK
+ *   100Hz: 3 x 215us = 645us  < 1000us (1/1000sps) 满足 OK
  *   125Hz: 3 x 411us = 1233us > 1000us (1/1000sps) 不满足, 需降 PW 待验证
  * ============================================================ */
 #if (PPG_SAMPLE_RATE == 50)
@@ -127,7 +127,7 @@
 #define MAX30101_PPG_VALID_MASK        0x03FFFFU
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* PW=215us(17-bit), ADC=8192nA, SR=800sps, SMP_AVE=8x */
+/* PW=215us(17-bit), ADC=8192nA, SR=1000sps, SMP_AVE=8x */
 #define MAX30101_MULTI_LED_CTRL1_VAL   0x13U
 #define MAX30101_MULTI_LED_CTRL2_VAL   0x02U
 #define MAX30101_PPG_CHANNELS          3U
