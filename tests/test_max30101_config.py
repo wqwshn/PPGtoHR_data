@@ -26,7 +26,7 @@ def _rate_100_branch_until_else(section: str) -> str:
     )[0]
 
 
-def test_100hz_triple_led_uses_1000sps_with_8x_average():
+def test_100hz_triple_led_uses_1000sps_with_4x_average():
     spo2_branch = _rate_100_branch(
         _section_between(
             "MAX30101 SPO2_CONFIG_REG",
@@ -49,13 +49,13 @@ def test_100hz_triple_led_uses_1000sps_with_8x_average():
     assert "#define MAX30101_SPO2_CONFIG_VAL    0x56" in spo2_branch
     assert "SR=1000sps" in spo2_branch
     assert "PW=215us" in spo2_branch
-    assert "#define MAX30101_FIFO_CONFIG_VAL    0x7F" in fifo_branch
-    assert "SMP_AVE=8x" in fifo_branch
+    assert "#define MAX30101_FIFO_CONFIG_VAL    0x5F" in fifo_branch
+    assert "SMP_AVE=4x" in fifo_branch
     assert "#define MAX30101_PPG_RIGHT_SHIFT       1U" in decode_branch
     assert "#define MAX30101_PPG_VALID_MASK        0x01FFFFU" in decode_branch
 
 
 def test_project_documentation_matches_deployed_100hz_triple_led_config():
     assert "| SPO2_CONFIG | 0x0A | **0x56**" in PROJECT_CONFIG_DOC
-    assert "| FIFO_CONFIG | 0x08 | **0x7F**" in PROJECT_CONFIG_DOC
-    assert "1000sps / 8x" in PROJECT_CONFIG_DOC
+    assert "| FIFO_CONFIG | 0x08 | **0x5F**" in PROJECT_CONFIG_DOC
+    assert "1000sps / 4x" in PROJECT_CONFIG_DOC

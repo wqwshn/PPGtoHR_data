@@ -36,9 +36,9 @@ PPG Monitor - 协议定义与帧解析
   8-9   桥中1               uint16 BE   24bit高16bit, 8bit
   10-15 ACC X/Y/Z           int16 x3    加速度计完整16位 (大端)
   16-21 GYRO X/Y/Z          int16 x3    陀螺仪角速度 (大端)
-  22-24 PPG Green           3 bytes     17-bit 原始ADC值
-  25-27 PPG Red             3 bytes     17-bit 原始ADC值
-  28-30 PPG IR              3 bytes     17-bit 原始ADC值
+  22-24 PPG Green           3 bytes     Q4 平均值, 解析后除以 16 得到原始ADC码值
+  25-27 PPG Red             3 bytes     Q4 平均值, 解析后除以 16 得到原始ADC码值
+  28-30 PPG IR              3 bytes     Q4 平均值, 解析后除以 16 得到原始ADC码值
   31-32 Seq                 uint16 BE   Raw采样序号
   33    XOR 校验             uint8       bytes[2..32] 异或
   34    帧尾                uint8       0xCC
@@ -67,6 +67,8 @@ RAW_PACKET_LEN = 35
 RAW_XOR_START = 2    # XOR 计算起始偏移
 RAW_XOR_END = 32     # XOR 计算结束偏移 (含)
 RAW_XOR_POS = 33     # XOR 校验值位置
+PPG_AVG_FRAC_BITS = 4
+PPG_AVG_SCALE = 1 << PPG_AVG_FRAC_BITS
 
 # 1Hz Raw 链路诊断 STATUS 帧常量 (Phase A)
 STATUS_HEADER_BYTE_1 = 0xDD
@@ -184,9 +186,9 @@ class RawDataPacket:
     gyro_x: float         # 陀螺仪 X 轴角速度 (dps)
     gyro_y: float         # 陀螺仪 Y 轴角速度 (dps)
     gyro_z: float         # 陀螺仪 Z 轴角速度 (dps)
-    ppg_green: float      # 绿光 PPG 17-bit 原始值
-    ppg_red: float        # 红光 PPG 17-bit 原始值
-    ppg_ir: float         # 红外 PPG 17-bit 原始值
+    ppg_green: float      # 绿光 PPG Q4 平均值还原后的原始码值
+    ppg_red: float        # 红光 PPG Q4 平均值还原后的原始码值
+    ppg_ir: float         # 红外 PPG Q4 平均值还原后的原始码值
     sequence: int         # Raw 采样序号 (uint16, 固件侧采样周期)
 
 
@@ -258,10 +260,10 @@ def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
     gyro_y = _decode_int16((data[18] << 8) | data[19]) * RANGE_GYRO
     gyro_z = _decode_int16((data[20] << 8) | data[21]) * RANGE_GYRO
 
-    # PPG 三通道 (3 bytes each, 17-bit 对齐后的值)
-    ppg_green = ((data[22] << 16) | (data[23] << 8) | data[24]) & 0x01FFFF
-    ppg_red   = ((data[25] << 16) | (data[26] << 8) | data[27]) & 0x01FFFF
-    ppg_ir    = ((data[28] << 16) | (data[29] << 8) | data[30]) & 0x01FFFF
+    # PPG 三通道 (3 bytes each, 固件端 Q4 平均值)
+    ppg_green = ((data[22] << 16) | (data[23] << 8) | data[24]) / PPG_AVG_SCALE
+    ppg_red   = ((data[25] << 16) | (data[26] << 8) | data[27]) / PPG_AVG_SCALE
+    ppg_ir    = ((data[28] << 16) | (data[29] << 8) | data[30]) / PPG_AVG_SCALE
     sequence = (data[31] << 8) | data[32]
 
     return RawDataPacket(

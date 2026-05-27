@@ -42,6 +42,8 @@
 
 // PPG / GYRO / Raw序号偏移已在 main.h 中统一定义
 // PPG_START_INDEX = 22, GYRO_START_INDEX = 16, RAW_SEQUENCE_START_INDEX = 31
+#define PPG_AVG_FRAC_BITS 4U
+#define PPG_AVG_SCALE     (1U << PPG_AVG_FRAC_BITS)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -505,9 +507,9 @@ int main(void)
       uint8_t buf[MAX30101_FIFO_SAMPLE_BYTES]; /* 9 字节 */
 
       /* 缓存上次有效均值, 防止 FIFO 空读时跳变到 0 */
-      static uint32_t last_green_avg = 0;
-      static uint32_t last_red_avg = 0;
-      static uint32_t last_ir_avg = 0;
+      static uint32_t last_green_avg_q4 = 0;
+      static uint32_t last_red_avg_q4 = 0;
+      static uint32_t last_ir_avg_q4 = 0;
 
       for (uint8_t i = 0; i < sample_count; i++) {
           PPG_ReadFIFO_Burst(buf, MAX30101_FIFO_SAMPLE_BYTES);
@@ -522,21 +524,24 @@ int main(void)
       }
 
       if (sample_count > 0) {
-          last_green_avg = sum_green / sample_count;
-          last_red_avg   = sum_red / sample_count;
-          last_ir_avg    = sum_ir / sample_count;
+          last_green_avg_q4 =
+              ((sum_green << PPG_AVG_FRAC_BITS) + (sample_count / 2U)) / sample_count;
+          last_red_avg_q4 =
+              ((sum_red << PPG_AVG_FRAC_BITS) + (sample_count / 2U)) / sample_count;
+          last_ir_avg_q4 =
+              ((sum_ir << PPG_AVG_FRAC_BITS) + (sample_count / 2U)) / sample_count;
       }
 
-      /* 打包 PPG 三通道 (各3字节, 高位在前) */
-      allData[PPG_START_INDEX]     = (last_green_avg >> 16) & 0xFF;
-      allData[PPG_START_INDEX + 1] = (last_green_avg >> 8)  & 0xFF;
-      allData[PPG_START_INDEX + 2] =  last_green_avg        & 0xFF;
-      allData[PPG_START_INDEX + 3] = (last_red_avg >> 16)   & 0xFF;
-      allData[PPG_START_INDEX + 4] = (last_red_avg >> 8)    & 0xFF;
-      allData[PPG_START_INDEX + 5] =  last_red_avg          & 0xFF;
-      allData[PPG_START_INDEX + 6] = (last_ir_avg >> 16)    & 0xFF;
-      allData[PPG_START_INDEX + 7] = (last_ir_avg >> 8)     & 0xFF;
-      allData[PPG_START_INDEX + 8] =  last_ir_avg           & 0xFF;
+      /* 打包 PPG 三通道 Q4 平均值 (各3字节, 高位在前) */
+      allData[PPG_START_INDEX]     = (last_green_avg_q4 >> 16) & 0xFF;
+      allData[PPG_START_INDEX + 1] = (last_green_avg_q4 >> 8)  & 0xFF;
+      allData[PPG_START_INDEX + 2] =  last_green_avg_q4        & 0xFF;
+      allData[PPG_START_INDEX + 3] = (last_red_avg_q4 >> 16)   & 0xFF;
+      allData[PPG_START_INDEX + 4] = (last_red_avg_q4 >> 8)    & 0xFF;
+      allData[PPG_START_INDEX + 5] =  last_red_avg_q4          & 0xFF;
+      allData[PPG_START_INDEX + 6] = (last_ir_avg_q4 >> 16)    & 0xFF;
+      allData[PPG_START_INDEX + 7] = (last_ir_avg_q4 >> 8)     & 0xFF;
+      allData[PPG_START_INDEX + 8] =  last_ir_avg_q4           & 0xFF;
 
       /* 算法数据推送 (仅在线心率模式, 暂用绿光通道) */
 #if (!ENABLE_RAW_DATA_PACKET)

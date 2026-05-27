@@ -15,13 +15,27 @@ MAIN_H = (ROOT / "Core" / "Inc" / "main.h").read_text(encoding="utf-8")
 MAIN_C = (ROOT / "Core" / "Src" / "main.c").read_text(encoding="utf-8")
 
 
-def make_raw_packet(sequence: int) -> bytes:
+def _pack_ppg_q4(value: float) -> bytes:
+    scaled = int(round(value * 16.0))
+    return bytes([
+        (scaled >> 16) & 0xFF,
+        (scaled >> 8) & 0xFF,
+        scaled & 0xFF,
+    ])
+
+
+def make_raw_packet(
+    sequence: int,
+    green: float = 0x1234 + 0.25,
+    red: float = 0x5678 + 0.5,
+    ir: float = 0x7ABC + 0.75,
+) -> bytes:
     data = bytearray(protocol.RAW_PACKET_LEN)
     data[0] = protocol.RAW_HEADER_BYTE_0
     data[1] = protocol.RAW_HEADER_BYTE_1
-    data[22:25] = bytes([0x00, 0x12, 0x34])
-    data[25:28] = bytes([0x00, 0x56, 0x78])
-    data[28:31] = bytes([0x00, 0x7A, 0xBC])
+    data[22:25] = _pack_ppg_q4(green)
+    data[25:28] = _pack_ppg_q4(red)
+    data[28:31] = _pack_ppg_q4(ir)
     data[31] = (sequence >> 8) & 0xFF
     data[32] = sequence & 0xFF
     xor_val = 0
@@ -65,18 +79,19 @@ def make_status_packet(**values: int) -> bytes:
     return bytes(data)
 
 
-def test_raw_packet_parses_35_byte_sequence_field():
+def test_raw_packet_parses_35_byte_sequence_and_q4_ppg_fields():
     assert protocol.RAW_PACKET_LEN == 35
     assert protocol.RAW_XOR_END == 32
     assert protocol.RAW_XOR_POS == 33
+    assert protocol.PPG_AVG_FRAC_BITS == 4
 
     pkt = protocol.parse_raw_packet(make_raw_packet(0x1234))
 
     assert pkt is not None
     assert pkt.sequence == 0x1234
-    assert pkt.ppg_green == 0x1234
-    assert pkt.ppg_red == 0x5678
-    assert pkt.ppg_ir == 0x7ABC
+    assert pkt.ppg_green == 0x1234 + 0.25
+    assert pkt.ppg_red == 0x5678 + 0.5
+    assert pkt.ppg_ir == 0x7ABC + 0.75
 
 
 def test_raw_quality_stats_count_sequence_gaps_and_loss_rate():
@@ -274,6 +289,13 @@ def test_firmware_declares_phase_a_status_diagnostics():
     assert "HAL_UART_TxCpltCallback" in MAIN_C
     assert "raw_diag_tx_busy_counter++" in MAIN_C
     assert "raw_diag_ppg_fifo_empty_counter++" in MAIN_C
+
+
+def test_firmware_packs_ppg_average_with_q4_fractional_precision():
+    assert "#define PPG_AVG_FRAC_BITS 4U" in MAIN_C
+    assert "last_green_avg_q4" in MAIN_C
+    assert "sum_green << PPG_AVG_FRAC_BITS" in MAIN_C
+    assert "last_green_avg = sum_green / sample_count" not in MAIN_C
 
 
 def test_firmware_schedules_status_after_raw_dma_completion():

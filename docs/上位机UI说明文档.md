@@ -194,9 +194,9 @@ CSV 列定义:
 8-9    桥中1               uint16 BE   ADS124S06 24bit高16bit
 10-15  ACC X/Y/Z           int16 BE    LSM9DS1完整16bit, X/Y/Z
 16-21  GYRO X/Y/Z          int16 BE    LSM9DS1完整16bit, X/Y/Z
-22-24  PPG Green           3 bytes     17-bit原始值
-25-27  PPG Red             3 bytes     17-bit原始值
-28-30  PPG IR              3 bytes     17-bit原始值
+22-24  PPG Green           3 bytes     Q4均值, 上位机除以16还原为原始码值
+25-27  PPG Red             3 bytes     Q4均值, 上位机除以16还原为原始码值
+28-30  PPG IR              3 bytes     Q4均值, 上位机除以16还原为原始码值
 31-32  Seq                 uint16 BE   固件侧Raw采样序号, 0xFFFF后回绕
 33     XOR 校验             uint8       bytes[2..32] 异或
 34     帧尾                uint8       0xCC
