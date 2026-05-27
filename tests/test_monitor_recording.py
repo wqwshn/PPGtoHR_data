@@ -160,6 +160,10 @@ def test_status_summary_exposes_diagnostic_counters():
         imu_error_counter=4,
         ppg_fifo_empty_counter=5,
         ppg_fifo_overflow_counter=6,
+        ppg_fifo_sample_total_counter=250,
+        ppg_fifo_nonempty_counter=90,
+        ppg_fifo_single_sample_counter=10,
+        ppg_fifo_multi_sample_counter=80,
     )
     snapshot = raw_data_panel.RawQualityStats().observe_status(status)
 
@@ -169,6 +173,7 @@ def test_status_summary_exposes_diagnostic_counters():
     assert "Err 2" in text
     assert "PCGap 0" in text
     assert "FIFO 5/6" in text
+    assert "PPGAvg 2.78" in text
 
 
 def test_status_summary_uses_chinese_labels_in_chinese_mode():
@@ -186,6 +191,10 @@ def test_status_summary_uses_chinese_labels_in_chinese_mode():
         imu_error_counter=4,
         ppg_fifo_empty_counter=5,
         ppg_fifo_overflow_counter=6,
+        ppg_fifo_sample_total_counter=250,
+        ppg_fifo_nonempty_counter=90,
+        ppg_fifo_single_sample_counter=10,
+        ppg_fifo_multi_sample_counter=80,
     )
     snapshot = raw_data_panel.RawQualityStats().observe_status(status)
 
@@ -195,6 +204,7 @@ def test_status_summary_uses_chinese_labels_in_chinese_mode():
     assert "发送错误 2" in text
     assert "发送后缺口 0" in text
     assert "FIFO空/溢出 5/6" in text
+    assert "PPG均值 2.78" in text
     assert "Busy" not in text
 
 
@@ -213,6 +223,10 @@ def test_status_csv_row_exports_diagnostic_snapshot():
         imu_error_counter=4,
         ppg_fifo_empty_counter=5,
         ppg_fifo_overflow_counter=6,
+        ppg_fifo_sample_total_counter=250,
+        ppg_fifo_nonempty_counter=90,
+        ppg_fifo_single_sample_counter=10,
+        ppg_fifo_multi_sample_counter=80,
     )
     stats = raw_data_panel.RawQualityStats()
     stats.observe_parser_stats(raw_total=120, raw_invalid=3)
@@ -240,6 +254,12 @@ def test_status_csv_row_exports_diagnostic_snapshot():
         3,
         3,
     ]
+    assert "PpgFifoSampleTotalCounter" in raw_data_panel.STATUS_CSV_HEADER
+    row = raw_data_panel.status_packet_to_csv_row(status, snapshot, 1.25)
+    total_idx = raw_data_panel.STATUS_CSV_HEADER.index("PpgFifoSampleTotalCounter")
+    multi_idx = raw_data_panel.STATUS_CSV_HEADER.index("PpgFifoMultiSampleCounter")
+    assert row[total_idx] == 250
+    assert row[multi_idx] == 80
 
 
 def test_serial_reader_exposes_raw_parse_stats_signal():

@@ -72,12 +72,12 @@ PPG_AVG_SCALE = 1 << PPG_AVG_FRAC_BITS
 
 # 1Hz Raw 链路诊断 STATUS 帧常量 (Phase A)
 STATUS_HEADER_BYTE_1 = 0xDD
-RAW_DIAG_PROTOCOL_VERSION = 1
-STATUS_PACKET_LEN = 53
+RAW_DIAG_PROTOCOL_VERSION = 2
+STATUS_PACKET_LEN = 69
 STATUS_XOR_START = 2
-STATUS_XOR_END = 50
-STATUS_XOR_POS = 51
-STATUS_FOOTER_POS = 52
+STATUS_XOR_END = 66
+STATUS_XOR_POS = 67
+STATUS_FOOTER_POS = 68
 
 
 @dataclass
@@ -208,6 +208,10 @@ class StatusPacket:
     imu_error_counter: int
     ppg_fifo_empty_counter: int
     ppg_fifo_overflow_counter: int
+    ppg_fifo_sample_total_counter: int
+    ppg_fifo_nonempty_counter: int
+    ppg_fifo_single_sample_counter: int
+    ppg_fifo_multi_sample_counter: int
 
 
 def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
@@ -286,14 +290,14 @@ def _read_u32_be(data: bytes, offset: int) -> int:
 
 def parse_status_packet(data: bytes) -> Optional[StatusPacket]:
     """
-    解析 53 字节 Raw 链路诊断 STATUS 包.
+    解析 69 字节 Raw 链路诊断 STATUS 包.
 
     帧格式:
       0-1   0xAA 0xDD
       2     protocol_version
-      3-50  12 个 uint32 BE 诊断计数器
-      51    XOR(bytes[2..50])
-      52    0xCC
+      3-66  16 个 uint32 BE 诊断计数器
+      67    XOR(bytes[2..66])
+      68    0xCC
     """
     if len(data) != STATUS_PACKET_LEN:
         return None
@@ -310,7 +314,7 @@ def parse_status_packet(data: bytes) -> Optional[StatusPacket]:
 
     offset = 3
     fields: list[int] = []
-    for _ in range(12):
+    for _ in range(16):
         fields.append(_read_u32_be(data, offset))
         offset += 4
 
@@ -328,4 +332,8 @@ def parse_status_packet(data: bytes) -> Optional[StatusPacket]:
         imu_error_counter=fields[9],
         ppg_fifo_empty_counter=fields[10],
         ppg_fifo_overflow_counter=fields[11],
+        ppg_fifo_sample_total_counter=fields[12],
+        ppg_fifo_nonempty_counter=fields[13],
+        ppg_fifo_single_sample_counter=fields[14],
+        ppg_fifo_multi_sample_counter=fields[15],
     )

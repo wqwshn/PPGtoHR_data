@@ -135,13 +135,13 @@ void Error_Handler(void);
 #define PACKET_LEN 35
 #define XOR_CHECK_LEN 31  /* 校验区域: ADC(8) + ACC(6) + GYRO(6) + PPG(9) + SEQ(2) = 31 */
 
-/* Raw 链路诊断 STATUS 帧: 53字节, 1Hz, 帧头 0xAA 0xDD */
+/* Raw 链路诊断 STATUS 帧: 69字节, 1Hz, 帧头 0xAA 0xDD */
 #define STATUS_HEADER_BYTE_1 0xDD
-#define RAW_DIAG_PROTOCOL_VERSION 1
-#define STATUS_PACKET_LEN 53
-#define STATUS_XOR_CHECK_LEN 49  /* protocol_version(1) + uint32计数器(12*4) */
-#define STATUS_XOR_INDEX 51
-#define STATUS_FOOTER_INDEX 52
+#define RAW_DIAG_PROTOCOL_VERSION 2
+#define STATUS_PACKET_LEN 69
+#define STATUS_XOR_CHECK_LEN 65  /* protocol_version(1) + uint32计数器(16*4) */
+#define STATUS_XOR_INDEX 67
+#define STATUS_FOOTER_INDEX 68
 
 /* 数据段偏移定义 */
 #define GYRO_START_INDEX  16   /* 2(头) + 8(ADC) + 6(ACC) = 16 */

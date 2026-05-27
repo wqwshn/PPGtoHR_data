@@ -124,7 +124,7 @@ class SerialReader(QThread):
                             state = 2
                         elif byte == STATUS_HEADER_BYTE_1:  # 0xDD -> Raw链路诊断状态包
                             buf.append(byte)
-                            expected_len = STATUS_PACKET_LEN  # 53
+                            expected_len = STATUS_PACKET_LEN  # 69
                             state = 2
                         elif byte == HEADER_BYTE_0:
                             # 连续 0xAA, 重新开始

@@ -6,7 +6,7 @@
 
 质量检测覆盖从 MCU 采样触发到 PC 端文件保存的全路径，分为三个层面：
 
-- **MCU 固件侧**：12 路诊断计数器 + STATUS 状态帧
+- **MCU 固件侧**：16 路诊断计数器 + STATUS 状态帧
 - **UART/DMA 物理层**：发送状态监控 + 调度策略
 - **PC 上位机侧**：帧校验 + 序号缺口 + STATUS 对照 + 三类输出文件
 
@@ -19,9 +19,9 @@ sample     adc_drdy    frame      tx_start    tx_done       PC valid frame
 counter     counter    counter    counter     counter
 ```
 
-## 2. MCU 固件侧：12 路诊断计数器
+## 2. MCU 固件侧：16 路诊断计数器
 
-定义于 `Core/Src/main.c:74-85`，12 个 `volatile uint32_t` 计数器：
+定义于 `Core/Src/main.c`，16 个 `volatile uint32_t` 计数器：
 
 | 计数器 | 递增位置 | 语义 |
 |---|---|---|
@@ -36,6 +36,10 @@ counter     counter    counter    counter     counter
 | `imu_error_counter` | (预留) | IMU 读取异常 |
 | `ppg_fifo_empty_counter` | 主循环 PPG FIFO 读取 | FIFO 写指针与读指针差为 0 |
 | `ppg_fifo_overflow_counter` | 主循环 PPG FIFO 读取 | FIFO 可用样本数 >= 31，逼近溢出 |
+| `ppg_fifo_sample_total_counter` | 主循环 PPG FIFO 读取 | 非空周期累计读取到的 FIFO 样本数 |
+| `ppg_fifo_nonempty_counter` | 主循环 PPG FIFO 读取 | FIFO 非空读取周期次数 |
+| `ppg_fifo_single_sample_counter` | 主循环 PPG FIFO 读取 | 非空但只读取 1 个样本的周期次数 |
+| `ppg_fifo_multi_sample_counter` | 主循环 PPG FIFO 读取 | 读取 2 个及以上样本并参与均值的周期次数 |
 
 ### 2.1 计数器递增细节
 
@@ -59,8 +63,15 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) {
 
 ```c
 uint8_t sample_count = (wr_ptr - rd_ptr) & 0x1F;
-if (sample_count == 0)       → ppg_fifo_empty_counter++;
-else if (sample_count >= 31) → ppg_fifo_overflow_counter++;
+if (sample_count == 0) {
+    ppg_fifo_empty_counter++;
+} else {
+    ppg_fifo_sample_total_counter += sample_count;
+    ppg_fifo_nonempty_counter++;
+    if (sample_count == 1) ppg_fifo_single_sample_counter++;
+    else                   ppg_fifo_multi_sample_counter++;
+    if (sample_count >= 31) ppg_fifo_overflow_counter++;
+}
 ```
 
 FIFO 空读时固件复用上一有效均值，避免跳变到 0。该现象被计数器记录，用于后诊断而非实时阻断。
@@ -82,12 +93,12 @@ raw_packet_seq++;
 
 ### 3.1 帧格式
 
-STATUS 帧头为 `0xAA 0xDD`，固定 53 字节 (`main.h:141`)，1Hz 上报。
+STATUS 帧头为 `0xAA 0xDD`，固定 69 字节 (`main.h`)，1Hz 上报。
 
 | 偏移 | 字段 | 类型 |
 |---|---|---|
 | 0-1 | Header | 0xAA, 0xDD |
-| 2 | protocol_version | uint8 (当前 = 1) |
+| 2 | protocol_version | uint8 (当前 = 2) |
 | 3-6 | mcu_time_ms | uint32 BE |
 | 7-10 | sample_counter | uint32 BE |
 | 11-14 | adc_drdy_counter | uint32 BE |
@@ -100,8 +111,12 @@ STATUS 帧头为 `0xAA 0xDD`，固定 53 字节 (`main.h:141`)，1Hz 上报。
 | 39-42 | imu_error_counter | uint32 BE |
 | 43-46 | ppg_fifo_empty_counter | uint32 BE |
 | 47-50 | ppg_fifo_overflow_counter | uint32 BE |
-| 51 | XOR | bytes[2..50] 异或 |
-| 52 | 0xCC | 帧尾 |
+| 51-54 | ppg_fifo_sample_total_counter | uint32 BE |
+| 55-58 | ppg_fifo_nonempty_counter | uint32 BE |
+| 59-62 | ppg_fifo_single_sample_counter | uint32 BE |
+| 63-66 | ppg_fifo_multi_sample_counter | uint32 BE |
+| 67 | XOR | bytes[2..66] 异或 |
+| 68 | 0xCC | 帧尾 |
 
 ### 3.2 STATUS 发送调度
 

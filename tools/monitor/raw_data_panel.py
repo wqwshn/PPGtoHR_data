@@ -53,6 +53,8 @@ STATUS_CSV_HEADER = [
     "TxStartCounter", "TxDoneCounter", "TxBusyCounter", "TxErrorCounter",
     "AdcDrdyCounter", "AdcErrorCounter", "ImuErrorCounter",
     "PpgFifoEmptyCounter", "PpgFifoOverflowCounter",
+    "PpgFifoSampleTotalCounter", "PpgFifoNonemptyCounter",
+    "PpgFifoSingleSampleCounter", "PpgFifoMultiSampleCounter",
     "PcReceivedRaw", "PcExpectedRaw", "PcMissingRaw",
     "PcMissingAfterTxDone", "TxInflight",
     "PcRawTotalCandidates", "PcRawInvalidCandidates", "PcRawInvalidDelta",
@@ -155,17 +157,24 @@ def status_packet_to_summary(
     snapshot: DiagnosticSnapshot,
     lang: str = "en",
 ) -> str:
+    ppg_avg = (
+        status.ppg_fifo_sample_total_counter / status.ppg_fifo_nonempty_counter
+        if status.ppg_fifo_nonempty_counter > 0
+        else 0.0
+    )
     if lang == "zh":
         return (
             f"诊断: 发送忙 {status.tx_busy_counter} | "
             f"发送错误 {status.tx_error_counter} | "
             f"发送后缺口 {snapshot.pc_missing_after_tx_done} | "
-            f"FIFO空/溢出 {status.ppg_fifo_empty_counter}/{status.ppg_fifo_overflow_counter}"
+            f"FIFO空/溢出 {status.ppg_fifo_empty_counter}/{status.ppg_fifo_overflow_counter} | "
+            f"PPG均值 {ppg_avg:.2f}"
         )
     return (
         f"Diag: Busy {status.tx_busy_counter} | Err {status.tx_error_counter} | "
         f"PCGap {snapshot.pc_missing_after_tx_done} | "
-        f"FIFO {status.ppg_fifo_empty_counter}/{status.ppg_fifo_overflow_counter}"
+        f"FIFO {status.ppg_fifo_empty_counter}/{status.ppg_fifo_overflow_counter} | "
+        f"PPGAvg {ppg_avg:.2f}"
     )
 
 
@@ -188,6 +197,10 @@ def status_packet_to_csv_row(
         status.imu_error_counter,
         status.ppg_fifo_empty_counter,
         status.ppg_fifo_overflow_counter,
+        status.ppg_fifo_sample_total_counter,
+        status.ppg_fifo_nonempty_counter,
+        status.ppg_fifo_single_sample_counter,
+        status.ppg_fifo_multi_sample_counter,
         snapshot.pc_received_raw,
         snapshot.pc_expected_raw,
         snapshot.pc_missing_raw,

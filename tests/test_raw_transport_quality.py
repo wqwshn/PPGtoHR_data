@@ -65,6 +65,10 @@ def make_status_packet(**values: int) -> bytes:
         values.get("imu_error_counter", 4),
         values.get("ppg_fifo_empty_counter", 5),
         values.get("ppg_fifo_overflow_counter", 6),
+        values.get("ppg_fifo_sample_total_counter", 250),
+        values.get("ppg_fifo_nonempty_counter", 90),
+        values.get("ppg_fifo_single_sample_counter", 10),
+        values.get("ppg_fifo_multi_sample_counter", 80),
     ]
     pos = 3
     for value in fields:
@@ -149,8 +153,9 @@ def test_raw_quality_stats_rejects_small_backward_sequence_as_out_of_order():
 
 def test_status_packet_parses_diagnostic_counters():
     assert protocol.STATUS_HEADER_BYTE_1 == 0xDD
-    assert protocol.STATUS_PACKET_LEN == 53
-    assert protocol.STATUS_XOR_POS == 51
+    assert protocol.RAW_DIAG_PROTOCOL_VERSION == 2
+    assert protocol.STATUS_PACKET_LEN == 69
+    assert protocol.STATUS_XOR_POS == 67
 
     pkt = protocol.parse_status_packet(make_status_packet(tx_busy_counter=7))
 
@@ -168,6 +173,10 @@ def test_status_packet_parses_diagnostic_counters():
     assert pkt.imu_error_counter == 4
     assert pkt.ppg_fifo_empty_counter == 5
     assert pkt.ppg_fifo_overflow_counter == 6
+    assert pkt.ppg_fifo_sample_total_counter == 250
+    assert pkt.ppg_fifo_nonempty_counter == 90
+    assert pkt.ppg_fifo_single_sample_counter == 10
+    assert pkt.ppg_fifo_multi_sample_counter == 80
 
 
 def test_status_packet_rejects_corrupted_xor():
@@ -283,12 +292,14 @@ def test_firmware_raw_packet_declares_sequence_extended_layout():
 
 def test_firmware_declares_phase_a_status_diagnostics():
     assert "#define STATUS_HEADER_BYTE_1 0xDD" in MAIN_H
-    assert "#define STATUS_PACKET_LEN 53" in MAIN_H
-    assert "#define RAW_DIAG_PROTOCOL_VERSION" in MAIN_H
+    assert "#define STATUS_PACKET_LEN 69" in MAIN_H
+    assert "#define RAW_DIAG_PROTOCOL_VERSION 2" in MAIN_H
     assert "BuildStatusFrame" in MAIN_C
     assert "HAL_UART_TxCpltCallback" in MAIN_C
     assert "raw_diag_tx_busy_counter++" in MAIN_C
     assert "raw_diag_ppg_fifo_empty_counter++" in MAIN_C
+    assert "raw_diag_ppg_fifo_sample_total_counter += sample_count" in MAIN_C
+    assert "raw_diag_ppg_fifo_multi_sample_counter++" in MAIN_C
 
 
 def test_firmware_packs_ppg_average_with_q4_fractional_precision():

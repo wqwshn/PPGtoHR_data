@@ -85,6 +85,10 @@ static volatile uint32_t raw_diag_adc_error_counter = 0;
 static volatile uint32_t raw_diag_imu_error_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_empty_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_overflow_counter = 0;
+static volatile uint32_t raw_diag_ppg_fifo_sample_total_counter = 0;
+static volatile uint32_t raw_diag_ppg_fifo_nonempty_counter = 0;
+static volatile uint32_t raw_diag_ppg_fifo_single_sample_counter = 0;
+static volatile uint32_t raw_diag_ppg_fifo_multi_sample_counter = 0;
 
 /* ADC 相关 */
 uint8_t Utop_times1 = 0;
@@ -444,8 +448,17 @@ int main(void)
       uint8_t sample_count = (wr_ptr - rd_ptr) & 0x1F;
       if (sample_count == 0) {
           raw_diag_ppg_fifo_empty_counter++;
-      } else if (sample_count >= 31) {
-          raw_diag_ppg_fifo_overflow_counter++;
+      } else {
+          raw_diag_ppg_fifo_sample_total_counter += sample_count;
+          raw_diag_ppg_fifo_nonempty_counter++;
+          if (sample_count == 1U) {
+              raw_diag_ppg_fifo_single_sample_counter++;
+          } else {
+              raw_diag_ppg_fifo_multi_sample_counter++;
+          }
+          if (sample_count >= 31U) {
+              raw_diag_ppg_fifo_overflow_counter++;
+          }
       }
 
 #if (CURRENT_WORK_MODE == MODE_SPO2)
@@ -757,7 +770,11 @@ static void BuildStatusFrame(void)
   WriteU32BE(&statusData[pos], raw_diag_adc_error_counter); pos += 4;
   WriteU32BE(&statusData[pos], raw_diag_imu_error_counter); pos += 4;
   WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_empty_counter); pos += 4;
-  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_overflow_counter);
+  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_overflow_counter); pos += 4;
+  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_sample_total_counter); pos += 4;
+  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_nonempty_counter); pos += 4;
+  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_single_sample_counter); pos += 4;
+  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_multi_sample_counter);
 
   statusData[STATUS_XOR_INDEX] = CheckXOR(&statusData[2], STATUS_XOR_CHECK_LEN);
   statusData[STATUS_FOOTER_INDEX] = 0xCC;

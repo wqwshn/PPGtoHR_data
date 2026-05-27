@@ -9,7 +9,7 @@
 
 基于 PyQt5 + pyqtgraph 构建的暗色主题统一监测上位机，通过串口/蓝牙接收 STM32 单片机数据，支持两种工作面板:
 - **在线心率面板**: 1Hz 心率结果包 (31字节, 0xAA 0xCC)，实时展示融合心率、三路径对比、趋势曲线
-- **原始数据面板**: 100Hz 原始传感器包 (35字节, 0xAA 0xBB)，实时展示 PPG 波形、热膜桥压、加速度计、陀螺仪和链路质量；同时接收 1Hz Raw 链路诊断 STATUS 包 (53字节, 0xAA 0xDD)
+- **原始数据面板**: 100Hz 原始传感器包 (35字节, 0xAA 0xBB)，实时展示 PPG 波形、热膜桥压、加速度计、陀螺仪和链路质量；同时接收 1Hz Raw 链路诊断 STATUS 包 (69字节, 0xAA 0xDD)
 
 ### 1.1 运行方式
 
@@ -93,7 +93,7 @@ python tools/monitor/main.py --raw-simulate
 
 原始数据面板顶部信息条新增 `实时心率/Realtime HR`: 每 1 秒从绿光 PPG 缓冲区取最近 8 秒数据执行轻量纯 FFT 估计，仅用于静息采集时快速判断佩戴位置与绿光信号是否可解算。该计算不进入串口读取线程，也不在逐包 CSV 写入路径中执行；界面同步显示单次计算耗时 `Calc xx ms`，便于观察算法开销。
 
-原始数据面板顶部信息条新增 `诊断/Diag`: 显示固件 1Hz STATUS 帧中的关键链路诊断摘要。中文模式显示 `发送忙 x | 发送错误 y | 发送后缺口 z | FIFO空/溢出 empty/overflow`，英文模式显示 `Busy x | Err y | PCGap z | FIFO empty/overflow`。该信息用于判断缺失更可能来自 UART/DMA busy、发送错误、PC 端未收到或 PPG FIFO 空读/溢出。
+原始数据面板顶部信息条新增 `诊断/Diag`: 显示固件 1Hz STATUS 帧中的关键链路诊断摘要。中文模式显示 `发送忙 x | 发送错误 y | 发送后缺口 z | FIFO空/溢出 empty/overflow | PPG均值 n.nn`，英文模式显示 `Busy x | Err y | PCGap z | FIFO empty/overflow | PPGAvg n.nn`。其中 `PPG均值/PPGAvg` 表示每个非空 PPG FIFO 读取周期的平均样本数，用于判断 100Hz Raw 周期内是单样本读取还是多样本均值读取。
 
 ### 2.6 状态栏
 
@@ -114,7 +114,7 @@ python tools/monitor/main.py --raw-simulate
 - 原始数据面板录制生成三个 CSV：无后缀主 Raw CSV、同名 `_status.csv` 和 `_markers.csv`
 - 无后缀主 Raw CSV 默认按 100Hz 设备样本轴展开；真实样本 `ValidFlag=1`，若仍有缺失则插入 `ValidFlag=0` 且传感器字段为 `NaN` 的占位行
 - Raw `Seq` 仅在向前递增或 65535 后真实回绕时推进时间轴；重复 Seq 或小幅回退/乱序包会被计为异常并跳过，不再展开成 655xx 行 `NaN`
-- `_status.csv`: 记录 1Hz STATUS 计数器快照、PC 端 Raw 接收/缺失统计、Raw 候选帧解析统计和 `PCMissingAfterTxDone`，用于采集后诊断链路瓶颈
+- `_status.csv`: 记录 1Hz STATUS 计数器快照、PPG FIFO 样本数分布、PC 端 Raw 接收/缺失统计、Raw 候选帧解析统计和 `PCMissingAfterTxDone`，用于采集后诊断链路瓶颈
 - 串口读取线程采用 0.01s timeout + 最多 4 个 Raw 包的小块读取，避免 4096 字节读取造成约 124 包批量进入 UI
 
 ### 3.2 CSV 格式
@@ -216,14 +216,14 @@ CSV 列定义:
 
 不再生成 `_timeline.csv` 和 `_quality_events.csv`。详细文件构成和 NaN 占空语义见 `docs/原始数据录制文件结构说明.md`。
 
-### 5.3 Raw 链路诊断 STATUS 包 (53 字节, 1Hz, 帧头 0xAA 0xDD)
+### 5.3 Raw 链路诊断 STATUS 包 (69 字节, 1Hz, 帧头 0xAA 0xDD)
 
 STATUS 包用于第一阶段链路诊断，不改变 35 字节 Raw DATA 包格式。
 
 ```
 偏移   字段                         类型        说明
 0-1    帧头                         uint8 x2    0xAA, 0xDD
-2      protocol_version             uint8       当前为 1
+2      protocol_version             uint8       当前为 2
 3-6    mcu_time_ms                  uint32 BE   MCU HAL_GetTick()
 7-10   sample_counter               uint32 BE   TIM16 采样 tick 总数
 11-14  adc_drdy_counter             uint32 BE   ADC DRDY 中断次数
@@ -236,8 +236,12 @@ STATUS 包用于第一阶段链路诊断，不改变 35 字节 Raw DATA 包格�
 39-42  imu_error_counter            uint32 BE   IMU 运行期异常次数
 43-46  ppg_fifo_empty_counter       uint32 BE   PPG FIFO 空读次数
 47-50  ppg_fifo_overflow_counter    uint32 BE   PPG FIFO 接近满/溢出风险次数
-51     XOR 校验                      uint8       bytes[2..50] 异或
-52     帧尾                         uint8       0xCC
+51-54  ppg_fifo_sample_total_counter uint32 BE  PPG FIFO 非空周期累计读取样本数
+55-58  ppg_fifo_nonempty_counter    uint32 BE   PPG FIFO 非空读取周期次数
+59-62  ppg_fifo_single_sample_counter uint32 BE 单样本读取周期次数
+63-66  ppg_fifo_multi_sample_counter uint32 BE  多样本均值读取周期次数
+67     XOR 校验                      uint8       bytes[2..66] 异或
+68     帧尾                         uint8       0xCC
 ```
 
 录制时 `_status.csv` 的关键派生列:
@@ -245,6 +249,7 @@ STATUS 包用于第一阶段链路诊断，不改变 35 字节 Raw DATA 包格�
 - `PcMissingAfterTxDone`: 从本次录制首个 STATUS 建立基线后，计算 `tx_done_counter` 增量与 `PcReceivedRaw` 增量的差值，用于估算 MCU 已完成发送但 PC 未解析成功的帧数。
 - `TxInflight`: `tx_start_counter - tx_done_counter` 的非负部分，用于观察 DMA 是否长期未完成。
 - `PcRawTotalCandidates` / `PcRawInvalidCandidates` / `PcRawInvalidDelta`: PC 串口状态机收满的 Raw 候选帧总数、累计无效候选帧数和相邻 STATUS 之间新增无效候选帧数。若 gap 周期内该 delta 增长，优先怀疑字节损坏、帧尾/XOR 校验失败或帧同步问题；若该 delta 不增长，优先怀疑下游串口/BLE 透传丢失。
+- `PpgFifoSampleTotalCounter` / `PpgFifoNonemptyCounter` / `PpgFifoSingleSampleCounter` / `PpgFifoMultiSampleCounter`: 统计 PPG FIFO 每次非空读取拿到的样本数分布。`SampleTotal / Nonempty` 越接近当前内部过采样预期，说明 Raw 周期中真实做了多样本均值；若长期接近 1 或空读增长，说明仍存在输出率/读取节拍不匹配。
 
 历史旧格式摘录如下，当前版本不再使用:
 
@@ -277,7 +282,7 @@ SpO2 模式: bytes[13-14]=16bit红光均值, bytes[15-16]=16bit红外均值
 2. 等待第二帧头字节区分协议:
    - 0xCC -> 31字节 HR 结果包 -> `parse_hr_packet()` -> `HRPacket`
    - 0xBB -> 35字节 原始传感器包 -> `parse_raw_packet()` -> `RawDataPacket`
-   - 0xDD -> 53字节 Raw 链路诊断包 -> `parse_status_packet()` -> `StatusPacket`
+   - 0xDD -> 69字节 Raw 链路诊断包 -> `parse_status_packet()` -> `StatusPacket`
 3. 收集 payload 直到满对应长度
 4. XOR 校验 + 帧尾验证
 5. 通过不同的 pyqtSignal 发射给对应面板
@@ -292,7 +297,7 @@ tools/monitor/
   dashboard.py         # MonitorWindow(外壳+工具栏) + HRPanel(在线心率面板) + 翻译表/配色
   raw_data_panel.py    # RawDataPanel(原始数据面板) - PPG/ACC/桥压/SpO2 波形
   realtime_hr.py       # 原始数据面板绿光PPG实时纯FFT心率估计
-  protocol.py          # HRPacket(31字节) + RawDataPacket(35字节) + StatusPacket(53字节) 协议定义与解析
+  protocol.py          # HRPacket(31字节) + RawDataPacket(35字节) + StatusPacket(69字节) 协议定义与解析
   serial_reader.py     # 多协议串口读取线程 (QThread + 状态机)
   requirements.txt     # Python 依赖
   start_monitor.bat    # Windows 一键启动脚本
@@ -325,8 +330,9 @@ tools/monitor/
 | 2026-05-20 | Raw Seq 异常保护: 重复 Seq 与小幅回退/乱序包不再按 `% 65536` 展开为大规模缺失，主 CSV 避免出现 655xx 行误判 `NaN` |
 | 2026-05-12 | 原始数据面板初始标签中文化: `_build_info_bar` 中 Mode/Loss/Packets 初始占位文本改为中文，与默认 zh 语言一致 |
 | 2026-05-18 | 曲线标题实时显示最近10点平均值(精度1位小数, 33ms刷新); 新增 Marker 标记按钮, 录制时点击生成 `_markers.csv` 同步记录, 按钮显示累计次数 |
+| 2026-05-27 | 三路同步 PPG 采集配置更新: Raw 包 PPG 三通道改为 Q4 定点均值，上位机除以 16 保存小数；STATUS 升级到 v2/69字节，新增 PPG FIFO 累计样本数、非空周期、单样本周期和多样本周期计数，`诊断/Diag` 显示 `PPG均值/PPGAvg` |
 
 ---
 
-**最后更新**: 2026-05-18
+**最后更新**: 2026-05-27
 **对应分支**: main
