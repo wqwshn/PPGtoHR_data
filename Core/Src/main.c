@@ -818,10 +818,10 @@ static void PPG_Config_Green_Hardcoded(void)
     PPG_WriteOneByte(LED_CONTROL1, MAX30101_MULTI_LED_CTRL1_VAL); /* 0x13 */
     PPG_WriteOneByte(LED_CONTROL2, MAX30101_MULTI_LED_CTRL2_VAL); /* 0x02 */
 
-    /* --- 3. LED 电流: 三通道统一约 12.6mA --- */
-    PPG_WriteOneByte(LED3_PA_REG, 0x91);  /* Green */
-    PPG_WriteOneByte(LED1_PA_REG, 0x81);  /* Red */
-    PPG_WriteOneByte(LED2_PA_REG, 0x81);  /* IR */
+    /* --- 3. LED 电流: 0x6F/0x3F 加大电流对照组 --- */
+    PPG_WriteOneByte(LED3_PA_REG, 0xE0);  /* Green */ //2、4、6、8、A、C、E、FF对应1-8挡
+    PPG_WriteOneByte(LED1_PA_REG, 0xC0);  /* Red */
+    PPG_WriteOneByte(LED2_PA_REG, 0xC0);  /* IR */
 
     /* --- 4. SPO2_CONFIG: RGE + SR + PW (由 sample_rate_config.h 决定) --- */
     PPG_WriteOneByte(SPO2_CONFIG_REG, MAX30101_SPO2_CONFIG_VAL);
