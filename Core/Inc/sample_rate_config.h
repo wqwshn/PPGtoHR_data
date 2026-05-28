@@ -9,10 +9,10 @@
  *
  * 各模式 MAX30101 内部采样策略:
  *   50Hz  -> 内部 800sps / 16x 平均 = 50sps 有效输出
- *   100Hz -> 内部 1000sps / 4x 平均 = 250sps 有效输出 (MCU 100Hz 读取)
+ *   100Hz -> 内部 400sps / 2x 平均 = 200sps 有效输出 (MCU 100Hz 读取)
  *   125Hz -> 内部 1000sps / 4x 平均 = 250sps 有效输出 (MCU 125Hz 读取)
  *
- * 约束: 三光路 100Hz 默认使用 215us (17-bit), 内部速率不超过 1000sps.
+ * 约束: 三光路 100Hz 当前部署 411us (18-bit), 内部速率 400sps, 时序余量 50.7%.
  ******************************************************************************
  */
 
@@ -26,7 +26,7 @@
  * 可选值: 50, 100, 125
  * ============================================================ */
 #ifndef PPG_SAMPLE_RATE
-#define PPG_SAMPLE_RATE    125
+#define PPG_SAMPLE_RATE    100
 #endif
 
 /* ============================================================
@@ -63,10 +63,10 @@
 #define MAX30101_SPO2_CONFIG_VAL    0x73
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* ADC=8192nA(10) | SR=1000sps(101) | PW=215us(10) = 0x56
- * 三光路约束: 3 LEDs x 215us = 645us < 1000us (1/1000sps)
- * 保持17-bit解包不变, 通过250sps传感器输出给100Hz轮询留FIFO裕量 */
-#define MAX30101_SPO2_CONFIG_VAL    0x56
+/* ADC=16384nA(011) | SR=400sps(011) | PW=411us(11) = 0x6F
+ * 三光路约束: 3 LEDs x 411us = 1233us < 2500us (1/400sps), 余量 50.7%
+ * 18-bit/411us 保持高单样本 SNR, 400sps 确保三路时序安全 */
+#define MAX30101_SPO2_CONFIG_VAL    0x6F
 
 #elif (PPG_SAMPLE_RATE == 125)
 /* ADC=16384nA(011) | SR=1000sps(101) | PW=411us(11) = 0x77 */
@@ -83,8 +83,8 @@
 #define MAX30101_FIFO_CONFIG_VAL    0x9F
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* SMP_AVE=4x(010) | ROLLOVER(1) | A_FULL=15(1111) = 0x5F */
-#define MAX30101_FIFO_CONFIG_VAL    0x5F
+/* SMP_AVE=2x(001) | ROLLOVER(1) | A_FULL=15(1111) = 0x3F */
+#define MAX30101_FIFO_CONFIG_VAL    0x3F
 
 #elif (PPG_SAMPLE_RATE == 125)
 /* SMP_AVE=4x(010) | ROLLOVER(1) | A_FULL=15(1111) = 0x5F */
@@ -99,7 +99,7 @@
 #define PPG_RATE_STR    "50Hz (800/16x, Multi-LED G+R+IR)"
 
 #elif (PPG_SAMPLE_RATE == 100)
-#define PPG_RATE_STR    "100Hz (1000/4x, Multi-LED G+R+IR)"
+#define PPG_RATE_STR    "100Hz (400/2x, Multi-LED G+R+IR, 18-bit)"
 
 #elif (PPG_SAMPLE_RATE == 125)
 #define PPG_RATE_STR    "125Hz (1000/4x)"
@@ -113,8 +113,8 @@
  * CTRL2: [6:4]SLOT4=000 | [2:0]SLOT3=010 = 0x02
  *
  * 时隙约束: 3 x LED_PW < 1/内部采样率
- *   50Hz:  3 x 411us = 1233us < 1250us (1/800sps)  满足 OK
- *   100Hz: 3 x 215us = 645us  < 1000us (1/1000sps) 满足 OK
+ *   50Hz:  3 x 411us = 1233us < 1250us (1/800sps)  满足但裕量窄
+ *   100Hz: 3 x 411us = 1233us < 2500us (1/400sps)  余量 50.7%, 安全
  *   125Hz: 3 x 411us = 1233us > 1000us (1/1000sps) 不满足, 需降 PW 待验证
  * ============================================================ */
 #if (PPG_SAMPLE_RATE == 50)
@@ -127,13 +127,13 @@
 #define MAX30101_PPG_VALID_MASK        0x03FFFFU
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* PW=215us(17-bit), ADC=8192nA, SR=1000sps, SMP_AVE=4x */
+/* PW=411us(18-bit), ADC=16384nA, SR=400sps, SMP_AVE=2x */
 #define MAX30101_MULTI_LED_CTRL1_VAL   0x13U
 #define MAX30101_MULTI_LED_CTRL2_VAL   0x02U
 #define MAX30101_PPG_CHANNELS          3U
 #define MAX30101_FIFO_SAMPLE_BYTES     (MAX30101_PPG_CHANNELS * 3U) /* 9 */
-#define MAX30101_PPG_RIGHT_SHIFT       1U   /* 17-bit: shift=3-code(2)=1 */
-#define MAX30101_PPG_VALID_MASK        0x01FFFFU
+#define MAX30101_PPG_RIGHT_SHIFT       0U   /* 18-bit: shift=3-code(3)=0 */
+#define MAX30101_PPG_VALID_MASK        0x03FFFFU
 
 #else
 /* 125Hz 待适配 (需 PW=215us + SPO2_CONFIG=0x75) */

@@ -124,7 +124,7 @@ void Error_Handler(void);
 
 /* PPG 采样率 (Hz): 50 / 100 / 125
  * 50Hz:  内部 800sps / 16x 硬件平均 = 50sps
- * 100Hz: 内部 1000sps / 4x 硬件平均 = 250sps, MCU 100Hz 读取
+ * 100Hz: 内部 400sps / 2x 硬件平均 = 200sps, MCU 100Hz 读取
  * 125Hz: 内部 1000sps / 4x 硬件平均 = 250sps, MCU 125Hz 读取
  */
 #define PPG_SAMPLE_RATE         100

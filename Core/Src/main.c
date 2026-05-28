@@ -526,7 +526,7 @@ int main(void)
 
       for (uint8_t i = 0; i < sample_count; i++) {
           PPG_ReadFIFO_Burst(buf, MAX30101_FIFO_SAMPLE_BYTES);
-          /* 17-bit 数据, 左对齐在24-bit中, 需右移1位对齐 */
+          /* PPG有效位宽由 sample_rate_config.h 控制: 17-bit右移1位, 18-bit不右移 */
           uint32_t raw;
           raw = ((uint32_t)buf[0] << 16) | ((uint32_t)buf[1] << 8) | buf[2];
           sum_green += (raw >> MAX30101_PPG_RIGHT_SHIFT) & MAX30101_PPG_VALID_MASK;
