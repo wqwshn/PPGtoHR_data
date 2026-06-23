@@ -112,6 +112,9 @@ class SerialReader(QThread):
         Returns:
             True  - 匹配完成 (成功或失败), prefix_buf 已清空
             False - 匹配进行中, 需要更多字节
+
+        注意: 不在每次匹配时发射 mac_configured 信号 (100Hz 开销).
+              仅通过 AT 响应 (_parse_at_response) 确认初始握手状态.
         """
         prefix_buf.append(byte)
 
@@ -129,11 +132,13 @@ class SerialReader(QThread):
                     mac = self._extract_mac_from_prefix(prefix_str)
                     if mac:
                         self._mac_configured = True
-                        self.mac_configured.emit(mac, True)
                     prefix_buf.clear()
                     return True
 
         return False  # 需要更多字节
+
+    # 预编译: From 前缀 MAC 提取正则 (避免每帧重复编译)
+    _PREFIX_MAC_RE = re.compile(r'^From\s+([0-9a-fA-F]{12}):?$')
 
     def _extract_mac_from_prefix(self, prefix: str) -> Optional[str]:
         """
@@ -142,7 +147,7 @@ class SerialReader(QThread):
         Returns:
             12 字节小写 HEX MAC 字符串, 或 None (格式不匹配)
         """
-        m = re.match(r'^From\s+([0-9a-fA-F]{12}):?$', prefix)
+        m = self._PREFIX_MAC_RE.match(prefix)
         if m:
             return m.group(1).lower()
         return None
