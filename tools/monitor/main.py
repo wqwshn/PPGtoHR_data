@@ -45,6 +45,7 @@ class AppController:
         self._reader.calib_status_received.connect(self._win._raw_panel.handle_calib_status)
         self._reader.error_occurred.connect(self._on_error)
         self._reader.connection_changed.connect(self._win.set_connected)
+        self._reader.mac_configured.connect(self._win.on_mac_configured)
         self._reader.start()
 
     def _disconnect(self):

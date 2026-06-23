@@ -71,6 +71,9 @@ TRANSLATIONS = {
         "record_pts": "录制",
         "lang": "EN",
         "disconnected": "未连接",
+        "mac_configuring": "正在配置设备绑定...",
+        "mac_configured": "已绑定设备 MAC: ",
+        "mac_config_failed": "MAC 配置失败，请检查设备",
         "connected": "已连接",
         "simulated": "模拟中",
         "no_ports": "未发现串口",
@@ -106,9 +109,9 @@ TRANSLATIONS = {
         "hr_filling": "填充中",
         "hr_weak": "信号弱",
         "hr_calc": "计算",
-        "ppg_green": "PPG 绿光",
-        "ppg_red": "PPG 红光",
-        "ppg_ir": "PPG 红外",
+        "ppg_green": "PPG Green (nA)",
+        "ppg_red": "PPG Red (nA)",
+        "ppg_ir": "PPG IR (nA)",
         "bridge_top": "桥顶电压",
         "bridge_mid": "桥中电压",
         "acceleration": "加速度",
@@ -131,6 +134,9 @@ TRANSLATIONS = {
         "record_pts": "Rec",
         "lang": "中文",
         "disconnected": "Disconnected",
+        "mac_configuring": "Configuring device binding...",
+        "mac_configured": "Bound MAC: ",
+        "mac_config_failed": "MAC config failed, check device",
         "connected": "Connected",
         "simulated": "Simulated",
         "no_ports": "No ports found",
@@ -166,9 +172,9 @@ TRANSLATIONS = {
         "hr_filling": "Filling",
         "hr_weak": "Weak signal",
         "hr_calc": "Calc",
-        "ppg_green": "PPG Green",
-        "ppg_red": "PPG Red",
-        "ppg_ir": "PPG IR",
+        "ppg_green": "PPG Green (nA)",
+        "ppg_red": "PPG Red (nA)",
+        "ppg_ir": "PPG IR (nA)",
         "bridge_top": "Bridge Top",
         "bridge_mid": "Bridge Mid",
         "acceleration": "Acceleration",
@@ -572,14 +578,34 @@ class MonitorWindow(QMainWindow):
         self._btn_connect.setEnabled(not connected)
         self._btn_disconnect.setEnabled(connected)
         self._combo_port.setEnabled(not connected)
-        self._conn_label.setText(t["connected"] if connected else t["disconnected"])
-        self._conn_label.setStyleSheet(
-            f"color: {COLOR_GREEN if connected else COLOR_TEXT_DIM}; font-size: 12px;"
-        )
+        if connected:
+            self._conn_label.setText(t["mac_configuring"])
+            self._conn_label.setStyleSheet(
+                f"color: {COLOR_ORANGE}; font-size: 12px;"
+            )
+        else:
+            self._conn_label.setText(t["disconnected"])
+            self._conn_label.setStyleSheet(
+                f"color: {COLOR_TEXT_DIM}; font-size: 12px;"
+            )
 
     def show_error(self, msg: str):
         self._conn_label.setText(msg)
         self._conn_label.setStyleSheet(f"color: {COLOR_RED}; font-size: 12px;")
+
+    def on_mac_configured(self, mac: str, success: bool):
+        """HJ-380 MAC 绑定配置结果回调"""
+        t = TRANSLATIONS[self._lang]
+        if success:
+            self._conn_label.setText(t["mac_configured"] + mac.upper())
+            self._conn_label.setStyleSheet(
+                f"color: {COLOR_GREEN}; font-size: 12px; font-weight: bold;"
+            )
+        else:
+            self._conn_label.setText(t["mac_config_failed"])
+            self._conn_label.setStyleSheet(
+                f"color: {COLOR_RED}; font-size: 12px; font-weight: bold;"
+            )
 
     def update_status(self, text: str):
         self._status_label.setText(text)
