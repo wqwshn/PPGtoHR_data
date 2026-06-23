@@ -6,11 +6,18 @@ PPG Monitor - 串口读取线程
   - 31 字节心率结果包 (0xAA 0xCC) -> hr_packet_received
   - 35 字节多光谱原始传感器包 (0xAA 0xBB) -> raw_packet_received
   - 53 字节 Raw 链路诊断状态包 (0xAA 0xDD) -> status_packet_received
+
+HJ-380 BLE 适配:
+  - 连接握手: 自动发送 ST_CON_MAC 绑定指令
+  - 前缀剥离: 识别并剥离 From mac: 数据前缀
+  - AT 响应解析: 解析 HJ-380 命令应答, 发射 MAC 配置状态
 """
 from __future__ import annotations
 
+import re
 import serial
 import serial.tools.list_ports
+import time
 from typing import List, Optional
 from PyQt5.QtCore import QThread, pyqtSignal
 
@@ -21,6 +28,10 @@ from protocol import (
     parse_hr_packet, HRPacket,
     parse_raw_packet, RawDataPacket,
     parse_status_packet, StatusPacket,
+    BLE_CUSTOM_MAC,
+    HJ380_PREFIX_FROM, HJ380_MAX_PREFIX_LEN,
+    HJ380_CMD_CON_MAC_FMT, HJ380_RSP_CON_MAC_OK,
+    HJ380_HANDSHAKE_TIMEOUT_S,
 )
 
 SERIAL_READ_TIMEOUT_S = 0.01
@@ -35,7 +46,7 @@ def read_serial_chunk(serial_port) -> bytes:
 
 
 class SerialReader(QThread):
-    """串口读取与双协议帧解析线程"""
+    """串口读取与双协议帧解析线程 (含 HJ-380 BLE 适配)"""
 
     # 信号: 心率结果包 (1Hz)
     hr_packet_received = pyqtSignal(HRPacket)
@@ -51,6 +62,8 @@ class SerialReader(QThread):
     error_occurred = pyqtSignal(str)
     # 信号: 连接状态变化
     connection_changed = pyqtSignal(bool)
+    # 信号: HJ-380 MAC 配置结果 (mac, success)
+    mac_configured = pyqtSignal(str, bool)
 
     def __init__(self, port: str, baudrate: int = 115200, parent=None):
         super().__init__(parent)
@@ -61,9 +74,122 @@ class SerialReader(QThread):
         # 原始包统计 (用于丢包率计算)
         self._raw_total = 0
         self._raw_invalid = 0
+        # HJ-380 握手状态
+        self._handshake_deadline = 0.0
+        self._mac_configured = False
+
+    # ── HJ-380 握手与 AT 命令 ─────────────────────────────
+
+    def _send_command(self, cmd: str) -> bool:
+        """向 HJ-380 发送 AT 命令, 返回是否发送成功"""
+        try:
+            if self._serial and self._serial.is_open:
+                self._serial.write(cmd.encode("ascii"))
+                self._serial.flush()
+                return True
+        except (serial.SerialException, OSError):
+            pass
+        return False
+
+    def _do_hj380_handshake(self) -> bool:
+        """HJ-380 连接握手: 发送 ST_CON_MAC 绑定指令"""
+        cmd = HJ380_CMD_CON_MAC_FMT.format(BLE_CUSTOM_MAC)
+        return self._send_command(cmd)
+
+    # ── HJ-380 From 前缀剥离 ──────────────────────────────
+
+    def _feed_prefix(self, byte: int, prefix_buf: bytearray) -> bool:
+        """
+        HJ-380 From 前缀逐字节匹配.
+
+        匹配模式: From<whitespace><12-hex-MAC>:<whitespace>
+        例如: "From    784128c58150:  "
+
+        Returns:
+            True  - 匹配完成 (成功或失败), prefix_buf 已清空
+            False - 匹配进行中, 需要更多字节
+        """
+        prefix_buf.append(byte)
+
+        # 超长保护
+        if len(prefix_buf) > HJ380_MAX_PREFIX_LEN:
+            self._flush_prefix_as_text(prefix_buf)
+            return True
+
+        # 检测分隔符 ": " (冒号 + 空格), 认为前缀结束
+        buf_len = len(prefix_buf)
+        if buf_len >= 2:
+            for i in range(buf_len - 1):
+                if prefix_buf[i] == 0x3A and prefix_buf[i + 1] == 0x20:  # ':' + ' '
+                    prefix_str = bytes(prefix_buf[:i + 1]).decode("ascii", errors="ignore")
+                    mac = self._extract_mac_from_prefix(prefix_str)
+                    if mac:
+                        self._mac_configured = True
+                        self.mac_configured.emit(mac, True)
+                    prefix_buf.clear()
+                    return True
+
+        return False  # 需要更多字节
+
+    def _extract_mac_from_prefix(self, prefix: str) -> Optional[str]:
+        """
+        从 "From    784128c58150" 格式中提取 12 位 MAC 地址.
+
+        Returns:
+            12 字节小写 HEX MAC 字符串, 或 None (格式不匹配)
+        """
+        m = re.match(r'^From\s+([0-9a-fA-F]{12}):?$', prefix)
+        if m:
+            return m.group(1).lower()
+        return None
+
+    def _flush_prefix_as_text(self, prefix_buf: bytearray):
+        """将无效前缀缓冲作为标定文本行输出"""
+        try:
+            line = bytes(prefix_buf).decode("ascii", errors="ignore").strip()
+            if line:
+                self.calib_status_received.emit(line)
+        except Exception:
+            pass
+        prefix_buf.clear()
+
+    # ── HJ-380 AT 响应解析 ─────────────────────────────────
+
+    def _parse_at_response(self, data: bytes):
+        """
+        解析 HJ-380 AT 响应.
+
+        格式: <st_con_mac=xxxxxxxxxxxx>  连接成功
+              <st_con_mac=error>         连接失败
+              其他 AT 响应作为调试文本输出
+        """
+        try:
+            text = data.decode("ascii", errors="ignore")
+        except Exception:
+            return
+
+        if text.startswith("<") and text.endswith(">"):
+            inner = text[1:-1]
+        else:
+            return
+
+        if inner.startswith(HJ380_RSP_CON_MAC_OK):
+            mac = inner[len(HJ380_RSP_CON_MAC_OK):]
+            if len(mac) == 12:
+                self._mac_configured = True
+                self.mac_configured.emit(mac, True)
+            elif mac == "error":
+                self._mac_configured = True
+                self.mac_configured.emit(BLE_CUSTOM_MAC, False)
+            else:
+                self.mac_configured.emit(BLE_CUSTOM_MAC, False)
+        else:
+            self.calib_status_received.emit(text)
+
+    # ── 主循环 ────────────────────────────────────────────
 
     def run(self):
-        """线程主循环: 打开串口 -> 逐字节状态机解析双协议帧"""
+        """线程主循环: 打开串口 -> HJ-380 握手 -> 带前缀剥离的状态机解析"""
         try:
             self._serial = serial.Serial(
                 port=self._port,
@@ -82,21 +208,67 @@ class SerialReader(QThread):
             self.connection_changed.emit(False)
             return
 
-        # 状态机: 0=等待帧头0(0xAA), 1=等待帧头1区分协议, 2=收集 payload
+        # HJ-380 连接握手: 发送 ST_CON_MAC 绑定指令
+        if not self._do_hj380_handshake():
+            self.error_occurred.emit("HJ-380: 配置指令发送失败")
+        self._handshake_deadline = time.time() + HJ380_HANDSHAKE_TIMEOUT_S
+        self._mac_configured = False
+
+        # 帧状态机: 0=等待帧头0(0xAA), 1=等待帧头1区分协议, 2=收集 payload
         state = 0
         buf = bytearray()
         expected_len = 0
         # ASCII 文本行缓冲 (用于标定状态等调试文本)
         text_buf = bytearray()
+        # HJ-380 From 前缀匹配缓冲
+        prefix_buf = bytearray()
+        # HJ-380 AT 响应缓冲
+        at_buf = bytearray()
 
         try:
             while self._running:
                 # 小块低延迟读取, 避免4096字节约124个原始包批量进入UI线程.
                 raw = read_serial_chunk(self._serial)
                 if not raw:
+                    # 握手超时检测
+                    if (not self._mac_configured and
+                            self._handshake_deadline > 0 and
+                            time.time() > self._handshake_deadline):
+                        self._handshake_deadline = 0.0
+                        self.mac_configured.emit(BLE_CUSTOM_MAC, False)
                     continue
 
                 for byte in raw:
+                    # ── AT 响应收集 (独立于帧状态机) ──
+                    if len(at_buf) > 0:
+                        at_buf.append(byte)
+                        if byte == 0x3E:  # '>'
+                            self._parse_at_response(bytes(at_buf))
+                            at_buf.clear()
+                        elif len(at_buf) > 128:
+                            at_buf.clear()
+                        continue
+
+                    # ── 前缀匹配 (独立于帧状态机) ──
+                    if len(prefix_buf) > 0:
+                        if self._feed_prefix(byte, prefix_buf):
+                            # 匹配完成, 前缀缓冲已清空, 进入下一字节
+                            continue
+                        else:
+                            # 匹配进行中
+                            continue
+
+                    # ── 检测 AT 响应起始 '<' ──
+                    if byte == 0x3C:  # '<'
+                        at_buf = bytearray([byte])
+                        continue
+
+                    # ── 检测 From 前缀起始 'F' ──
+                    if byte == HJ380_PREFIX_FROM[0]:  # 'F'
+                        prefix_buf = bytearray([byte])
+                        continue
+
+                    # ── 原有帧状态机 ──
                     if state == 0:
                         if byte == HEADER_BYTE_0:  # 0xAA
                             buf = bytearray([byte])
@@ -161,6 +333,9 @@ class SerialReader(QThread):
             if self._running:
                 self.error_occurred.emit(f"Serial error: {e}")
         finally:
+            # 握手超时最终检测
+            if not self._mac_configured:
+                self.mac_configured.emit(BLE_CUSTOM_MAC, False)
             if self._serial and self._serial.is_open:
                 self._serial.close()
             self.connection_changed.emit(False)
