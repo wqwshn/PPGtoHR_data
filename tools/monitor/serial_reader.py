@@ -247,7 +247,7 @@ class SerialReader(QThread):
                     continue
 
                 for byte in raw:
-                    # ── AT 响应收集 (独立于帧状态机) ──
+                    # ── AT 响应收集 (进行中) ──
                     if len(at_buf) > 0:
                         at_buf.append(byte)
                         if byte == 0x3E:  # '>'
@@ -257,26 +257,25 @@ class SerialReader(QThread):
                             at_buf.clear()
                         continue
 
-                    # ── 前缀匹配 (独立于帧状态机) ──
+                    # ── From 前缀匹配 (进行中) ──
                     if len(prefix_buf) > 0:
                         if self._feed_prefix(byte, prefix_buf):
-                            # 匹配完成, 前缀缓冲已清空, 进入下一字节
                             continue
                         else:
-                            # 匹配进行中
                             continue
 
-                    # ── 检测 AT 响应起始 '<' ──
-                    if byte == 0x3C:  # '<'
-                        at_buf = bytearray([byte])
-                        continue
+                    # ── 仅在帧状态机 IDLE 时检测 AT/Prefix 起始 ──
+                    # 关键: 不能拦截帧 payload 内部的 0x3C/0x46 字节
+                    if state == 0:
+                        if byte == 0x3C:  # '<' -> AT 响应起始
+                            at_buf = bytearray([byte])
+                            continue
 
-                    # ── 检测 From 前缀起始 'F' ──
-                    if byte == HJ380_PREFIX_FROM[0]:  # 'F'
-                        prefix_buf = bytearray([byte])
-                        continue
+                        if byte == HJ380_PREFIX_FROM[0]:  # 'F' -> From 前缀起始
+                            prefix_buf = bytearray([byte])
+                            continue
 
-                    # ── 原有帧状态机 ──
+                    # ── 帧状态机 ──
                     if state == 0:
                         if byte == HEADER_BYTE_0:  # 0xAA
                             buf = bytearray([byte])
