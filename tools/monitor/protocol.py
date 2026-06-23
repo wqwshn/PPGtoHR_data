@@ -48,6 +48,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+# ── HJ-131 / HJ-380 BLE MAC 绑定常量 ──────────────────────
+# 必须与 Core/Inc/main.h 中 BLE_CUSTOM_MAC 保持一致
+BLE_CUSTOM_MAC = "784128c58150"
+# HJ-380 数据前缀: "From" + 空格 + 12HEX MAC + ":  " + 数据
+HJ380_PREFIX_FROM = b"From"
+HJ380_MAX_PREFIX_LEN = 64
+# HJ-380 AT 命令/应答
+HJ380_CMD_CON_MAC_FMT = "<ST_CON_MAC={}>"
+HJ380_RSP_CON_MAC_OK = "st_con_mac="
+# HJ-380 连接握手超时 (秒)
+HJ380_HANDSHAKE_TIMEOUT_S = 3.0
+
 # 帧常量
 HEADER_BYTE_0 = 0xAA
 HEADER_BYTE_1 = 0xCC
