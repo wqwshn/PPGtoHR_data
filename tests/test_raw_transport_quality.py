@@ -318,7 +318,7 @@ def test_firmware_schedules_status_after_raw_dma_completion():
 
 
 def test_firmware_enables_ble_init_with_config_commands():
-    assert "#define ENABLE_BLE_CONFIG       0" in MAIN_H
+    assert "#define ENABLE_BLE_CONFIG       1" in MAIN_H
     assert "static void BLE_Init(void);" in MAIN_C
     assert "#if (ENABLE_BLE_CONFIG)" in MAIN_C
     assert "BLE_Init();" in MAIN_C
@@ -330,6 +330,7 @@ def test_firmware_enables_ble_init_with_config_commands():
         "<ST_WAKE=FOREVER>",
         "<ST_TX_POWER=+2.5>",
         "<ST_NAME=HJ-131-LYX>",
+        "<ST_OWN_MAC=",
         "<ST_BAUD=115200>",
         "<ST_CON_MIN_GAP=75>",
     ]
