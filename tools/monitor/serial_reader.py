@@ -92,7 +92,11 @@ class SerialReader(QThread):
         return False
 
     def _do_hj380_handshake(self) -> bool:
-        """HJ-380 连接握手: 发送 ST_CON_MAC 绑定指令"""
+        """HJ-380 连接握手: 断开已有连接 -> 绑定目标 MAC"""
+        # 步骤1: 断开所有已有连接 (避免 "已连接" 状态下 ST_CON_MAC 被忽略)
+        self._send_command("<ST_CENTER_LINK=ALL>")
+        time.sleep(0.15)
+        # 步骤2: 发送 ST_CON_MAC 绑定指令
         cmd = HJ380_CMD_CON_MAC_FMT.format(BLE_CUSTOM_MAC)
         return self._send_command(cmd)
 
@@ -198,6 +202,7 @@ class SerialReader(QThread):
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
                 timeout=SERIAL_READ_TIMEOUT_S,
+                write_timeout=0.5,   # 写超时 500ms, 防止阻塞
             )
             self._running = True
             self._raw_total = 0
@@ -208,7 +213,10 @@ class SerialReader(QThread):
             self.connection_changed.emit(False)
             return
 
-        # HJ-380 连接握手: 发送 ST_CON_MAC 绑定指令
+        # CH340 稳定等待: 串口打开后 DTR/RTS 可能触发设备复位, 需等待稳定
+        time.sleep(0.3)
+
+        # HJ-380 连接握手: 先断开已有连接, 再绑定目标 MAC
         if not self._do_hj380_handshake():
             self.error_occurred.emit("HJ-380: 配置指令发送失败")
         self._handshake_deadline = time.time() + HJ380_HANDSHAKE_TIMEOUT_S
