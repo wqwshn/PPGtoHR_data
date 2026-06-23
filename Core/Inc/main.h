@@ -105,7 +105,7 @@ void Error_Handler(void);
 /* 工作模式选择 */
 #define MODE_HEART_RATE 0
 #define MODE_SPO2       1
-#define CURRENT_WORK_MODE    MODE_HEART_RATE   /* 0=心率模式, 1=血氧模式 */
+#define CURRENT_WORK_MODE    MODE_HEART_RATE          /* 0=心率模式, 1=血氧模式 */
 
 /* 数据发送模式选择 (两种模式互斥, 不会同时发送)
  * 0 = 在线心率模式: 运行算法, 仅发送 1Hz HR 结果包 (0xAA 0xCC) [仅125Hz]
@@ -117,7 +117,13 @@ void Error_Handler(void);
  * 0 = 上电不发送 BLE 配置指令
  * 1 = 上电复位 BLE 模块后发送固定配置指令
  */
-#define ENABLE_BLE_CONFIG       0
+#define ENABLE_BLE_CONFIG       1
+
+/* 自定义 BLE MAC 地址 (12 字节 HEX, 大端)
+ * HJ-380 将只连接此 MAC 地址的 HJ-131 设备
+ * 与上位机 tools/monitor/protocol.py 中 BLE_CUSTOM_MAC 保持一致
+ */
+#define BLE_CUSTOM_MAC  "784128c58150"
 
 /* PPG 通道选择: 0=禁用PPG(占空发送), 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
 #define PPG_DEFAULT_CHANNEL     2

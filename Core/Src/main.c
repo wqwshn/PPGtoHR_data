@@ -97,8 +97,8 @@ uint8_t Utop_times2 = 5;
 /* PPG 相关变量 */
 #if (CURRENT_WORK_MODE == MODE_SPO2)
 // 血氧模式变量
-static uint32_t last_red_avg = 0;
-static uint32_t last_ir_avg = 0;
+static uint32_t last_red_avg_q4 = 0;
+static uint32_t last_ir_avg_q4 = 0;
 #else
 // 心率模式无额外缓存变量 (sum_green 直接计算, 无需缓存上次均值)
 #endif
@@ -462,25 +462,9 @@ int main(void)
       }
 
 #if (CURRENT_WORK_MODE == MODE_SPO2)
-      /* --- 3.1 血氧模式打包逻辑 --- */
-      /* --- 3.2 温度补偿状态机 (1Hz, 非阻塞) --- */
-      static uint8_t temp_tick = 0;
-      temp_tick++;
-      if (temp_tick >= PPG_SAMPLE_RATE) {
-          temp_tick = 0;
-      }
-      // 触发阶段：temp_tick == 0 时启动温度转换
-      if (temp_tick == 0) {
-          PPG_WriteOneByte(DIE_TEMP_CONFIG_REG, 0x01);
-      }
-      // 读取阶段：temp_tick == 4 时 (32ms后，满足29ms转换时间)
-      else if (temp_tick == 4) {
-          die_temp_int = PPG_ReadOneByte(DIE_TEMP_INT_REG);
-          die_temp_frac = PPG_ReadOneByte(DIE_TEMP_FRAC_REG);
-      }
-
+      /* --- 3.1 血氧模式: Red+IR Q4 均值采集 --- */
       uint32_t sum_red = 0, sum_ir = 0;
-      uint8_t buf[6];  // 每个样本6字节（3字节Red + 3字节IR）
+      uint8_t buf[6];  /* Red 3B + IR 3B, 18-bit 左对齐 */
 
       for (uint8_t i = 0; i < sample_count; i++) {
           PPG_ReadFIFO_Burst(buf, 6);
@@ -490,29 +474,23 @@ int main(void)
           sum_ir += ir_val;
       }
 
-      // 计算均值并转换为16-bit
-      uint32_t red_avg, ir_avg;
       if (sample_count > 0) {
-          red_avg = sum_red / sample_count;
-          ir_avg = sum_ir / sample_count;
-          red_avg >>= 2;
-          ir_avg >>= 2;
-          last_red_avg = red_avg;
-          last_ir_avg = ir_avg;
-      } else {
-          red_avg = last_red_avg;
-          ir_avg = last_ir_avg;
+          last_red_avg_q4 =
+              ((sum_red << PPG_AVG_FRAC_BITS) + (sample_count / 2U)) / sample_count;
+          last_ir_avg_q4 =
+              ((sum_ir << PPG_AVG_FRAC_BITS) + (sample_count / 2U)) / sample_count;
       }
 
-      allData[PPG_START_INDEX + 0] = die_temp_int;          /* 温度整数(借用Green高位) */
-      allData[PPG_START_INDEX + 1] = die_temp_frac;        /* 温度小数(借用Green中位) */
-      allData[PPG_START_INDEX + 2] = 0x00;
-      allData[PPG_START_INDEX + 3] = (red_avg >> 16) & 0xff;
-      allData[PPG_START_INDEX + 4] = (red_avg >> 8) & 0xff;
-      allData[PPG_START_INDEX + 5] = red_avg & 0xff;
-      allData[PPG_START_INDEX + 6] = (ir_avg >> 16) & 0xff;
-      allData[PPG_START_INDEX + 7] = (ir_avg >> 8) & 0xff;
-      allData[PPG_START_INDEX + 8] = ir_avg & 0xff;
+      /* 打包与心率模式统一布局: Green=0, Red Q4, IR Q4 (上位机无需改动) */
+      allData[PPG_START_INDEX + 0] = 0x00;  /* Green 高位=0 */
+      allData[PPG_START_INDEX + 1] = 0x00;  /* Green 中位=0 */
+      allData[PPG_START_INDEX + 2] = 0x00;  /* Green 低位=0 */
+      allData[PPG_START_INDEX + 3] = (last_red_avg_q4 >> 16) & 0xFF;
+      allData[PPG_START_INDEX + 4] = (last_red_avg_q4 >> 8)  & 0xFF;
+      allData[PPG_START_INDEX + 5] = last_red_avg_q4         & 0xFF;
+      allData[PPG_START_INDEX + 6] = (last_ir_avg_q4 >> 16)  & 0xFF;
+      allData[PPG_START_INDEX + 7] = (last_ir_avg_q4 >> 8)   & 0xFF;
+      allData[PPG_START_INDEX + 8] = last_ir_avg_q4          & 0xFF;
 
 #else
       /* --- 3.3 心率模式: 三通道 PPG 采集 (Green+Red+IR) --- */
@@ -671,8 +649,9 @@ static void BLE_Init(void)
     static const uint8_t CMD_WAKE[]        = "<ST_WAKE=FOREVER>";
     static const uint8_t CMD_TX_POWER[]    = "<ST_TX_POWER=+2.5>";
     static const uint8_t CMD_NAME[]        = "<ST_NAME=HJ-131-LYX>";
-    static const uint8_t CMD_BAUD[]        = "<ST_BAUD=115200>";
+    static const uint8_t CMD_OWN_MAC[]     = "<ST_OWN_MAC=" BLE_CUSTOM_MAC ">";
     static const uint8_t CMD_MIN_GAP[]     = "<ST_CON_MIN_GAP=75>";
+    static const uint8_t CMD_BAUD[]        = "<ST_BAUD=115200>";
 
     BLE_ResetModule();
 
@@ -699,6 +678,13 @@ static void BLE_Init(void)
     BLE_SendConfigCommand(CMD_TX_POWER, sizeof(CMD_TX_POWER) - 1);
     BLE_SendConfigCommand(CMD_NAME, sizeof(CMD_NAME) - 1);
     BLE_SendConfigCommand(CMD_MIN_GAP, sizeof(CMD_MIN_GAP) - 1);
+    /* 设置自定义 MAC 地址: 模块自动重启, 耗时约 500ms */
+    BLE_SendConfigCommand(CMD_OWN_MAC, sizeof(CMD_OWN_MAC) - 1);
+    HAL_Delay(600);
+    /* MAC 设置后模块重启, 波特率可能回到默认 19200, 重新发送唤醒序列 */
+    HAL_UART_Transmit(&huart2, wakeup_seq, sizeof(wakeup_seq), 100);
+    HAL_Delay(50);
+    /* 波特率设置必须在最后 (MAC 重启可能恢复默认波特率) */
     BLE_SendConfigCommand(CMD_BAUD, sizeof(CMD_BAUD) - 1);
     HAL_Delay(100);
     BLE_SetUartBaud(115200);
@@ -780,33 +766,33 @@ static void BuildStatusFrame(void)
   statusData[STATUS_FOOTER_INDEX] = 0xCC;
 }
 
-// PPG 血氧模式硬编码配置 (仅 SpO2 模式编译)
+// PPG 血氧模式硬件配置 (仅 SpO2 模式编译)
+// 最优参数: 0x77/0x5F = 1000sps/411us/18-bit, 4x 平均, 有效输出 250sps
+// 双通道时序: 2x411us=822us < 1000us(1/1000sps), 余量 17.8%
 #if (CURRENT_WORK_MODE == MODE_SPO2)
 static void PPG_Config_SpO2_Hardcoded(void)
 {
-    // --- 1. 工作模式配置 (血氧模式) ---
+    /* --- 1. Mode Configuration = 0x03: SpO2 (Red + IR) --- */
     PPG_WriteOneByte(MODE_CONFIG_REG, 0x03);
 
-    // --- 2. LED 亮度配置 (Red和IR) ---
-    PPG_WriteOneByte(LED1_PA_REG, 0x91);  // Red LED 电流 ~29mA
-    PPG_WriteOneByte(LED2_PA_REG, 0x91);  // IR LED 电流 ~29mA
+    /* --- 2. LED 电流 --- */
+    PPG_WriteOneByte(LED1_PA_REG, 0xC0);  /* Red  ~29mA */
+    PPG_WriteOneByte(LED2_PA_REG, 0xC0);  /* IR   ~29mA */
 
-    // --- 3. SPO2/ADC/采样率/脉宽 配置 ---
-    // ADC_RGE=16384nA(0x60) | SR=400sps(0x0C) | PW=411us/18-bit(0x03)
-    // 组合值：0x6F
-    PPG_WriteOneByte(SPO2_CONFIG_REG, 0x6F);
+    /* --- 3. SPO2_CONFIG = 0x77 ---
+     * ADC_RGE=16384nA(011) | SR=1000sps(101) | PW=411us/18-bit(11) */
+    PPG_WriteOneByte(SPO2_CONFIG_REG, 0x77);
 
-    // --- 4. FIFO 配置 ---
-    // SMP_AVE=不平均(0x00) | FIFO_ROLLOVER_EN(0x10) | FIFO_A_FULL=15(0x0F)
-    // 组合值：0x1F
-    PPG_WriteOneByte(FIFO_CONFIG_REG, 0x1F);
+    /* --- 4. FIFO_CONFIG = 0x5F ---
+     * SMP_AVE=4x(010) | ROLLOVER(1) | A_FULL=15(1111) */
+    PPG_WriteOneByte(FIFO_CONFIG_REG, 0x5F);
 
-    // --- 5. 清除 FIFO 指针/计数器 ---
+    /* --- 5. 清除 FIFO 指针 --- */
     PPG_WriteOneByte(FIFO_WR_PTR_REG, 0x00);
     PPG_WriteOneByte(OVF_COUNTER_REG, 0x00);
     PPG_WriteOneByte(FIFO_RD_PTR_REG, 0x00);
 }
-#endif /* MODE_SPO2 守卫结束 */
+#endif /* MODE_SPO2 */
 
 // PPG 多光路配置 (Green+Red+IR, 参数由 sample_rate_config.h 决定)
 static void PPG_Config_Green_Hardcoded(void)
