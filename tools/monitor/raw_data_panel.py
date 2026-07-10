@@ -10,7 +10,6 @@ import csv
 import math
 import time
 from collections import deque
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -659,20 +658,12 @@ class RawDataPanel(QWidget):
             f"color: {color}; font-size: 13px; font-weight: bold;"
         )
 
-    def _toggle_record(
-        self,
-        save_dir: Path = None,
-        raw_path: Optional[Path] = None,
-    ) -> bool:
+    def _toggle_record(self, raw_path: Path) -> bool:
         """
         切换录制状态.
         Returns: True=正在录制, False=停止录制
         """
         if not self._is_recording:
-            if raw_path is None:
-                if save_dir is None:
-                    save_dir = Path.home() / "Desktop"
-                raw_path = save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             raw_path = Path(raw_path)
             raw_path.parent.mkdir(parents=True, exist_ok=True)
             raw_path, status_path, marker_path = recording_output_paths(raw_path)

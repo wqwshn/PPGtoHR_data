@@ -3,6 +3,8 @@ import csv
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 MONITOR_DIR = ROOT / "tools" / "monitor"
@@ -166,8 +168,9 @@ def _raw_panel():
 
 def test_raw_recording_defers_marker_file_until_first_marker(tmp_path):
     panel = _raw_panel()
+    raw_path = tmp_path / "kaiji1_LYX_0710.csv"
 
-    assert raw_data_panel.RawDataPanel._toggle_record(panel, tmp_path) is True
+    assert raw_data_panel.RawDataPanel._toggle_record(panel, raw_path) is True
     assert list(tmp_path.glob("*_markers.csv")) == []
 
     raw_data_panel.RawDataPanel.add_marker(panel)
@@ -179,6 +182,23 @@ def test_raw_recording_defers_marker_file_until_first_marker(tmp_path):
         rows = list(csv.reader(marker_file))
     assert rows[0] == ["Elapsed(s)", "SampleIndex", "MarkerNo", "Note"]
     assert [row[2] for row in rows[1:]] == ["1", "2"]
+
+
+def test_raw_recording_leaves_no_marker_file_without_marker(tmp_path):
+    panel = _raw_panel()
+    raw_path = tmp_path / "kaiji1_LYX_0710.csv"
+
+    assert raw_data_panel.RawDataPanel._toggle_record(panel, raw_path) is True
+    raw_data_panel.RawDataPanel._stop_recording(panel)
+
+    assert not raw_data_panel.recording_output_paths(raw_path)[2].exists()
+
+
+def test_raw_recording_requires_a_prevalidated_raw_path(tmp_path):
+    panel = _raw_panel()
+
+    with pytest.raises(TypeError):
+        raw_data_panel.RawDataPanel._toggle_record(panel, save_dir=tmp_path)
 
 
 def test_raw_recording_uses_prevalidated_metadata_path(tmp_path):

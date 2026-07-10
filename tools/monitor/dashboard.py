@@ -360,8 +360,8 @@ class RecordingInfoDialog(QDialog):
         save_root: Path,
         metadata: Optional[RecordingMetadata],
         lang: str,
-        parent=None,
-    ):
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
         self._lang = lang
         self._confirmed_metadata: Optional[RecordingMetadata] = None
@@ -438,7 +438,7 @@ class RecordingInfoDialog(QDialog):
     def recording_metadata(self) -> Optional[RecordingMetadata]:
         return self._confirmed_metadata
 
-    def _browse_root(self):
+    def _browse_root(self) -> None:
         path = QFileDialog.getExistingDirectory(
             self, TRANSLATIONS[self._lang]["select_save_path"], self._root_input.text()
         )
@@ -446,7 +446,7 @@ class RecordingInfoDialog(QDialog):
             self._root_input.setText(path)
             self._suggest_trial()
 
-    def _normalize_subject(self, text: str):
+    def _normalize_subject(self, text: str) -> None:
         uppercase = text.upper()
         if uppercase != text:
             self._subject.setText(uppercase)
@@ -461,14 +461,14 @@ class RecordingInfoDialog(QDialog):
             record_date=date(selected_date.year(), selected_date.month(), selected_date.day()),
         )
 
-    def _suggest_trial(self, *args):
+    def _suggest_trial(self, *args: object) -> None:
         try:
             self._trial.setValue(suggest_next_trial(self._metadata_from_fields()))
         except ValueError:
             pass
         self._update_preview()
 
-    def _update_preview(self, *args):
+    def _update_preview(self, *args: object) -> None:
         try:
             paths = build_recording_paths(self._metadata_from_fields())
         except ValueError:
@@ -478,7 +478,7 @@ class RecordingInfoDialog(QDialog):
         self._directory_preview.setText(str(paths.directory))
         self._file_preview.setText(paths.raw_path.name)
 
-    def accept(self):
+    def accept(self) -> None:
         try:
             self._confirmed_metadata = self._metadata_from_fields()
             build_recording_paths(self._confirmed_metadata)
@@ -827,7 +827,7 @@ class MonitorWindow(QMainWindow):
             self._hr_panel._toggle_record(self._save_dir)
         else:
             if self._raw_panel.is_recording:
-                self._raw_panel._toggle_record()
+                self._raw_panel._stop_recording()
             elif self._raw_recording_metadata is None:
                 self.show_error(TRANSLATIONS[self._lang]["recording_info_required"])
                 return
