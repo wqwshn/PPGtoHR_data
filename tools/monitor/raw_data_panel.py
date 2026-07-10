@@ -255,6 +255,7 @@ class RawDataPanel(QWidget):
         self._csv_writer = None
         self._status_csv_file = None
         self._status_csv_writer = None
+        self._marker_path: Optional[Path] = None
         self._marker_csv_file = None
         self._marker_csv_writer = None
         self._marker_count = 0
@@ -658,26 +659,30 @@ class RawDataPanel(QWidget):
             f"color: {color}; font-size: 13px; font-weight: bold;"
         )
 
-    def _toggle_record(self, save_dir: Path = None) -> bool:
+    def _toggle_record(
+        self,
+        save_dir: Path = None,
+        raw_path: Optional[Path] = None,
+    ) -> bool:
         """
         切换录制状态.
         Returns: True=正在录制, False=停止录制
         """
         if not self._is_recording:
-            if save_dir is None:
-                save_dir = Path.home() / "Desktop"
-            save_dir.mkdir(parents=True, exist_ok=True)
-            path = save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            raw_path, status_path, marker_path = recording_output_paths(path)
+            if raw_path is None:
+                if save_dir is None:
+                    save_dir = Path.home() / "Desktop"
+                raw_path = save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            raw_path = Path(raw_path)
+            raw_path.parent.mkdir(parents=True, exist_ok=True)
+            raw_path, status_path, marker_path = recording_output_paths(raw_path)
             self._csv_file = open(raw_path, "w", newline="", encoding="utf-8-sig")
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow(RAW_CSV_HEADER)
             self._status_csv_file = open(status_path, "w", newline="", encoding="utf-8-sig")
             self._status_csv_writer = csv.writer(self._status_csv_file)
             self._status_csv_writer.writerow(STATUS_CSV_HEADER)
-            self._marker_csv_file = open(marker_path, "w", newline="", encoding="utf-8-sig")
-            self._marker_csv_writer = csv.writer(self._marker_csv_file)
-            self._marker_csv_writer.writerow(["Elapsed(s)", "SampleIndex", "MarkerNo", "Note"])
+            self._marker_path = marker_path
             self._marker_count = 0
             self._recording_start_time = time.time()
             self._recorded_sample_count = 0
@@ -707,14 +712,23 @@ class RawDataPanel(QWidget):
             self._marker_csv_file.close()
             self._marker_csv_file = None
             self._marker_csv_writer = None
+        self._marker_path = None
         self._marker_count = 0
         self._recording_start_time = None
         self._recorded_sample_count = 0
 
     def add_marker(self, note: str = ""):
         """录制时记录一个 marker 标记点, 与原始数据时间轴同步"""
-        if not self._is_recording or self._marker_csv_writer is None:
+        if not self._is_recording:
             return
+        if self._marker_csv_writer is None:
+            if self._marker_path is None:
+                return
+            self._marker_csv_file = open(
+                self._marker_path, "w", newline="", encoding="utf-8-sig"
+            )
+            self._marker_csv_writer = csv.writer(self._marker_csv_file)
+            self._marker_csv_writer.writerow(["Elapsed(s)", "SampleIndex", "MarkerNo", "Note"])
         self._marker_count += 1
         elapsed = time.time() - (self._recording_start_time or time.time())
         sample_index = max(self._quality.expected_count - 1, 0)

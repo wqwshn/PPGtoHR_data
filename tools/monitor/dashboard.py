@@ -16,20 +16,30 @@ import csv
 import os
 import time
 from collections import deque
-from datetime import datetime
+from dataclasses import replace
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
-from PyQt5.QtCore import Qt, QTimer, pyqtProperty, QSize
+from PyQt5.QtCore import Qt, QDate, QTimer, pyqtProperty, QSize
 from PyQt5.QtGui import QFont, QColor
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QComboBox, QPushButton, QProgressBar, QStatusBar,
     QFrame, QFileDialog, QStackedWidget, QButtonGroup,
+    QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QLineEdit,
+    QMessageBox, QSpinBox,
 )
 import pyqtgraph as pg
 
 from protocol import HRPacket
+from recording_naming import (
+    SCENARIO_OPTIONS,
+    RecordingMetadata,
+    build_recording_paths,
+    ensure_recording_available,
+    suggest_next_trial,
+)
 
 
 # ── 配色常量 (供 raw_data_panel 复用) ─────────────────────
@@ -65,6 +75,15 @@ TRANSLATIONS = {
         "marker": "标记",
         "save": "保存",
         "select_save_path": "选择保存路径",
+        "recording_info": "实验信息",
+        "recording_info_title": "Raw 录制实验信息",
+        "recording_root": "保存根目录",
+        "recording_scenario": "实验场景",
+        "recording_trial": "实验编号",
+        "recording_subject": "受试者缩写",
+        "recording_date": "实验日期",
+        "recording_preview": "文件预览",
+        "recording_info_required": "请先填写 Raw 录制实验信息",
         "recording_to": "录制中 ->",
         "record_saved": "录制已保存",
         "record_cancelled": "录制已取消",
@@ -128,6 +147,15 @@ TRANSLATIONS = {
         "marker": "Mark",
         "save": "Save",
         "select_save_path": "Select Save Path",
+        "recording_info": "Experiment Info",
+        "recording_info_title": "Raw Recording Information",
+        "recording_root": "Save root",
+        "recording_scenario": "Scenario",
+        "recording_trial": "Trial",
+        "recording_subject": "Subject initials",
+        "recording_date": "Record date",
+        "recording_preview": "File preview",
+        "recording_info_required": "Set Raw recording information first",
         "recording_to": "Recording ->",
         "record_saved": "Recording saved",
         "record_cancelled": "Recording cancelled",
@@ -324,6 +352,142 @@ class StatusDot(QLabel):
 
 # ── 顶层窗口 ──────────────────────────────────────────────
 
+class RecordingInfoDialog(QDialog):
+    """Collect and preview metadata required for one Raw recording."""
+
+    def __init__(
+        self,
+        save_root: Path,
+        metadata: Optional[RecordingMetadata],
+        lang: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._lang = lang
+        self._confirmed_metadata: Optional[RecordingMetadata] = None
+        t = TRANSLATIONS[lang]
+        self.setWindowTitle(t["recording_info_title"])
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        layout.addLayout(form)
+
+        self._root_input = QLineEdit(str(save_root))
+        self._root_input.setReadOnly(True)
+        root_row = QWidget()
+        root_layout = QHBoxLayout(root_row)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.addWidget(self._root_input, 1)
+        browse_button = QPushButton("...")
+        browse_button.setFixedWidth(32)
+        browse_button.clicked.connect(self._browse_root)
+        root_layout.addWidget(browse_button)
+        form.addRow(t["recording_root"], root_row)
+
+        self._scenario = QComboBox()
+        self._scenario.addItem("--", None)
+        for label, token in SCENARIO_OPTIONS:
+            self._scenario.addItem(f"{label} ({token})", token)
+        form.addRow(t["recording_scenario"], self._scenario)
+
+        self._trial = QSpinBox()
+        self._trial.setRange(1, 9999)
+        form.addRow(t["recording_trial"], self._trial)
+
+        self._subject = QLineEdit()
+        self._subject.setMaxLength(8)
+        self._subject.setPlaceholderText("LYX")
+        form.addRow(t["recording_subject"], self._subject)
+
+        self._record_date = QDateEdit(QDate.currentDate())
+        self._record_date.setCalendarPopup(True)
+        self._record_date.setDisplayFormat("yyyy-MM-dd")
+        form.addRow(t["recording_date"], self._record_date)
+
+        self._directory_preview = QLabel("--")
+        self._directory_preview.setWordWrap(True)
+        self._file_preview = QLabel("--")
+        self._file_preview.setWordWrap(True)
+        form.addRow(t["recording_preview"], self._directory_preview)
+        form.addRow("", self._file_preview)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        if metadata is not None:
+            self._root_input.setText(str(metadata.save_root))
+            scenario_index = self._scenario.findData(metadata.scenario_token)
+            self._scenario.setCurrentIndex(max(scenario_index, 0))
+            self._trial.setValue(metadata.trial)
+            self._subject.setText(metadata.subject)
+            self._record_date.setDate(
+                QDate(metadata.record_date.year, metadata.record_date.month, metadata.record_date.day)
+            )
+
+        self._scenario.currentIndexChanged.connect(self._suggest_trial)
+        self._subject.textChanged.connect(self._normalize_subject)
+        self._subject.textChanged.connect(self._suggest_trial)
+        self._record_date.dateChanged.connect(self._suggest_trial)
+        self._trial.valueChanged.connect(self._update_preview)
+        self._update_preview()
+
+    @property
+    def recording_metadata(self) -> Optional[RecordingMetadata]:
+        return self._confirmed_metadata
+
+    def _browse_root(self):
+        path = QFileDialog.getExistingDirectory(
+            self, TRANSLATIONS[self._lang]["select_save_path"], self._root_input.text()
+        )
+        if path:
+            self._root_input.setText(path)
+            self._suggest_trial()
+
+    def _normalize_subject(self, text: str):
+        uppercase = text.upper()
+        if uppercase != text:
+            self._subject.setText(uppercase)
+
+    def _metadata_from_fields(self) -> RecordingMetadata:
+        selected_date = self._record_date.date()
+        return RecordingMetadata(
+            save_root=Path(self._root_input.text()),
+            scenario_token=self._scenario.currentData(),
+            trial=self._trial.value(),
+            subject=self._subject.text().strip(),
+            record_date=date(selected_date.year(), selected_date.month(), selected_date.day()),
+        )
+
+    def _suggest_trial(self, *args):
+        try:
+            self._trial.setValue(suggest_next_trial(self._metadata_from_fields()))
+        except ValueError:
+            pass
+        self._update_preview()
+
+    def _update_preview(self, *args):
+        try:
+            paths = build_recording_paths(self._metadata_from_fields())
+        except ValueError:
+            self._directory_preview.setText("--")
+            self._file_preview.setText("--")
+            return
+        self._directory_preview.setText(str(paths.directory))
+        self._file_preview.setText(paths.raw_path.name)
+
+    def accept(self):
+        try:
+            self._confirmed_metadata = self._metadata_from_fields()
+            build_recording_paths(self._confirmed_metadata)
+        except ValueError as exc:
+            QMessageBox.warning(self, self.windowTitle(), str(exc))
+            return
+        super().accept()
+
+
 class MonitorWindow(QMainWindow):
     """统一监测主窗口: 管理工具栏、面板切换和状态栏"""
 
@@ -338,6 +502,7 @@ class MonitorWindow(QMainWindow):
         self._save_dir = Path.home() / "Desktop"
         if not self._save_dir.exists():
             self._save_dir = Path.home()
+        self._raw_recording_metadata: Optional[RecordingMetadata] = None
 
         # 创建子面板
         self._hr_panel = HRPanel(self)
@@ -463,6 +628,18 @@ class MonitorWindow(QMainWindow):
         self._btn_save_path.clicked.connect(self._browse_save_dir)
         layout.addWidget(self._btn_save_path)
 
+        self._btn_recording_info = QPushButton(t["recording_info"])
+        self._btn_recording_info.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {COLOR_CARD}; color: {COLOR_TEXT_DIM};
+                border: 1px solid {COLOR_CARD_BORDER}; border-radius: 4px;
+                padding: 6px 8px; font-size: 11px;
+            }}
+            QPushButton:hover {{ background-color: #2A3A4E; }}
+        """)
+        self._btn_recording_info.clicked.connect(self._open_recording_info)
+        layout.addWidget(self._btn_recording_info)
+
         # 标记点
         self._btn_marker = QPushButton(t["marker"])
         self._btn_marker.setStyleSheet(f"""
@@ -555,8 +732,31 @@ class MonitorWindow(QMainWindow):
         )
         if path:
             self._save_dir = Path(path)
-            self._btn_save_path.setText(self._save_dir.name)
-            self._btn_save_path.setToolTip(str(self._save_dir))
+            if self._raw_recording_metadata is not None:
+                updated = replace(self._raw_recording_metadata, save_root=self._save_dir)
+                self._raw_recording_metadata = replace(
+                    updated, trial=suggest_next_trial(updated)
+                )
+            self._update_save_dir_button()
+
+    def _update_save_dir_button(self):
+        self._btn_save_path.setText(self._save_dir.name)
+        self._btn_save_path.setToolTip(str(self._save_dir))
+
+    def _open_recording_info(self):
+        dialog = RecordingInfoDialog(
+            self._save_dir,
+            self._raw_recording_metadata,
+            self._lang,
+            self,
+        )
+        if dialog.exec_() != QDialog.Accepted or dialog.recording_metadata is None:
+            return
+        self._raw_recording_metadata = dialog.recording_metadata
+        self._save_dir = self._raw_recording_metadata.save_root
+        self._update_save_dir_button()
+        paths = build_recording_paths(self._raw_recording_metadata)
+        self._status_label.setText(str(paths.raw_path))
 
     # ── 公共接口 ─────────────────────────────────────────
 
@@ -626,7 +826,22 @@ class MonitorWindow(QMainWindow):
         if idx == 0:
             self._hr_panel._toggle_record(self._save_dir)
         else:
-            self._raw_panel._toggle_record(self._save_dir)
+            if self._raw_panel.is_recording:
+                self._raw_panel._toggle_record()
+            elif self._raw_recording_metadata is None:
+                self.show_error(TRANSLATIONS[self._lang]["recording_info_required"])
+                return
+            else:
+                try:
+                    paths = build_recording_paths(self._raw_recording_metadata)
+                    ensure_recording_available(paths)
+                    self._raw_panel._toggle_record(raw_path=paths.raw_path)
+                except (OSError, ValueError, FileExistsError) as exc:
+                    self.show_error(str(exc))
+                    return
+                self._status_label.setText(
+                    f"{TRANSLATIONS[self._lang]['recording_to']} {paths.raw_path}"
+                )
         self._update_record_button()
 
     def _add_marker_active(self):
@@ -657,6 +872,7 @@ class MonitorWindow(QMainWindow):
         self._btn_disconnect.setText(t["disconnect"])
         self._btn_refresh.setText(t["refresh"])
         self._btn_clear.setText(t["clear"])
+        self._btn_recording_info.setText(t["recording_info"])
         self._btn_lang.setText(t["lang"])
         self._btn_hr_panel.setText(t["panel_hr"])
         self._btn_raw_panel.setText(t["panel_raw"])

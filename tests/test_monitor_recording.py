@@ -1,4 +1,5 @@
 import sys
+import csv
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -143,6 +144,54 @@ def test_raw_recording_outputs_timeline_status_and_marker_csv():
     assert raw_path == Path("multi_tiaosheng1.csv")
     assert status_path == Path("multi_tiaosheng1_status.csv")
     assert marker_path == Path("multi_tiaosheng1_markers.csv")
+
+
+def _raw_panel():
+    return SimpleNamespace(
+        _is_recording=False,
+        _csv_file=None,
+        _csv_writer=None,
+        _status_csv_file=None,
+        _status_csv_writer=None,
+        _marker_csv_file=None,
+        _marker_csv_writer=None,
+        _marker_count=0,
+        _recording_start_time=None,
+        _recorded_sample_count=0,
+        _flush_counter=0,
+        _quality=SimpleNamespace(expected_count=0),
+        _reset_quality_stats=lambda: None,
+    )
+
+
+def test_raw_recording_defers_marker_file_until_first_marker(tmp_path):
+    panel = _raw_panel()
+
+    assert raw_data_panel.RawDataPanel._toggle_record(panel, tmp_path) is True
+    assert list(tmp_path.glob("*_markers.csv")) == []
+
+    raw_data_panel.RawDataPanel.add_marker(panel)
+    raw_data_panel.RawDataPanel.add_marker(panel)
+    raw_data_panel.RawDataPanel._stop_recording(panel)
+
+    marker_path = next(tmp_path.glob("*_markers.csv"))
+    with marker_path.open(newline="", encoding="utf-8-sig") as marker_file:
+        rows = list(csv.reader(marker_file))
+    assert rows[0] == ["Elapsed(s)", "SampleIndex", "MarkerNo", "Note"]
+    assert [row[2] for row in rows[1:]] == ["1", "2"]
+
+
+def test_raw_recording_uses_prevalidated_metadata_path(tmp_path):
+    panel = _raw_panel()
+    raw_path = tmp_path / "202607-multiperson" / "0710-LYX" / "kaiji1_LYX_0710.csv"
+
+    assert raw_data_panel.RawDataPanel._toggle_record(panel, raw_path=raw_path) is True
+    raw, status, marker = raw_data_panel.recording_output_paths(raw_path)
+    assert raw.exists()
+    assert status.exists()
+    assert not marker.exists()
+
+    raw_data_panel.RawDataPanel._stop_recording(panel)
 
 
 def test_status_summary_exposes_diagnostic_counters():

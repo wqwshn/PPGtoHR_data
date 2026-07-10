@@ -5,12 +5,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / "docs" / "原始数据录制文件结构说明.md"
 
 
-def test_raw_data_file_structure_doc_describes_all_recording_outputs():
+def test_raw_data_file_structure_doc_describes_metadata_based_recording_outputs():
     text = DOC.read_text(encoding="utf-8")
 
     for filename in [
-        "raw_data_YYYYMMDD_HHMMSS.csv",
-        "raw_data_YYYYMMDD_HHMMSS_status.csv",
+        "<scenario><trial>_<SUBJECT>_<MMDD>.csv",
+        "kaiji1_LYX_0710.csv",
+        "_status.csv",
+        "至少一次",
         "ValidFlag",
         "GapLen",
     ]:
