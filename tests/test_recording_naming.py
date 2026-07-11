@@ -34,6 +34,7 @@ def test_kaiji_metadata_builds_algorithm_compatible_output_paths(tmp_path):
     paths = build_recording_paths(_metadata(tmp_path))
 
     assert ("开机", "kaiji") in SCENARIO_OPTIONS
+    assert ("快速出拳", "quanji") in SCENARIO_OPTIONS
     assert paths.directory == tmp_path / "202607-multiperson" / "0710-LYX"
     assert paths.raw_path == paths.directory / "kaiji1_LYX_0710.csv"
     assert paths.status_path == paths.directory / "kaiji1_LYX_0710_status.csv"

@@ -20,7 +20,7 @@ SCENARIO_OPTIONS: tuple[tuple[str, str], ...] = (
     ("弯举", "wanju"),
     ("静息", "rest"),
     ("仰卧起坐", "yangwo"),
-    ("快速出拳", "box"),
+    ("快速出拳", "quanji"),
     ("高抬腿", "gaotai"),
     ("开机", "kaiji"),
 )
