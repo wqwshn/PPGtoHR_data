@@ -635,10 +635,15 @@ class RawDataPanel(QWidget):
         estimate = timed_estimate_green_fft_hr(list(self._data_ppg_g))
         self._last_hr_calc_ms = estimate.elapsed_ms
         calc_text = f"{t.get('hr_calc', 'Calc')} {estimate.elapsed_ms:.3f} ms"
+        snr_text = (
+            f"SNR {estimate.snr_db:.1f} dB"
+            if estimate.snr_db is not None
+            else "SNR --"
+        )
         if estimate.ready and estimate.bpm is not None:
             self._lbl_realtime_hr.setText(
                 f"{t.get('realtime_hr', 'Realtime HR')}: {estimate.bpm:.1f} BPM | "
-                f"{estimate.window_seconds:.0f}s | {calc_text}"
+                f"{snr_text} | {estimate.window_seconds:.0f}s | {calc_text}"
             )
             self._lbl_realtime_hr.setStyleSheet(
                 f"color: {COLOR_GREEN}; font-size: 13px; font-weight: bold;"
@@ -652,7 +657,8 @@ class RawDataPanel(QWidget):
             status = t.get("hr_weak", "Weak signal")
             color = COLOR_ORANGE
         self._lbl_realtime_hr.setText(
-            f"{t.get('realtime_hr', 'Realtime HR')}: -- ({status}) | {calc_text}"
+            f"{t.get('realtime_hr', 'Realtime HR')}: -- ({status}) | "
+            f"{snr_text} | {calc_text}"
         )
         self._lbl_realtime_hr.setStyleSheet(
             f"color: {color}; font-size: 13px; font-weight: bold;"

@@ -10,13 +10,19 @@ sys.path.insert(0, str(MONITOR_DIR))
 from realtime_hr import estimate_green_fft_hr, timed_estimate_green_fft_hr
 
 
-def _sine_ppg(bpm: float, seconds: float = 8.0, sample_rate_hz: float = 100.0) -> list[float]:
+def _sine_ppg(
+    bpm: float,
+    seconds: float = 8.0,
+    sample_rate_hz: float = 100.0,
+    amplitude: float = 7000.0,
+    drift_amplitude: float = 400.0,
+) -> list[float]:
     freq_hz = bpm / 60.0
     count = int(seconds * sample_rate_hz)
     return [
         50000.0
-        + 7000.0 * math.sin(2.0 * math.pi * freq_hz * idx / sample_rate_hz)
-        + 400.0 * math.sin(2.0 * math.pi * 0.2 * idx / sample_rate_hz)
+        + amplitude * math.sin(2.0 * math.pi * freq_hz * idx / sample_rate_hz)
+        + drift_amplitude * math.sin(2.0 * math.pi * 0.2 * idx / sample_rate_hz)
         for idx in range(count)
     ]
 
@@ -52,6 +58,18 @@ def test_estimate_green_fft_hr_rejects_flat_signal():
     assert estimate.ready is False
     assert estimate.bpm is None
     assert estimate.status == "weak"
+
+
+def test_estimate_green_fft_hr_accepts_low_amplitude_periodic_signal_with_high_snr():
+    estimate = estimate_green_fft_hr(
+        _sine_ppg(72.0, amplitude=30.0, drift_amplitude=0.0)
+    )
+
+    assert estimate.ready is True
+    assert estimate.bpm is not None
+    assert abs(estimate.bpm - 72.0) < 1.0
+    assert estimate.snr_db is not None
+    assert estimate.snr_db > 20.0
 
 
 def test_timed_estimate_green_fft_hr_reports_small_runtime():

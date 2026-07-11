@@ -13,7 +13,8 @@ DEFAULT_WINDOW_SECONDS = 8.0
 DEFAULT_MIN_HZ = 0.7
 DEFAULT_MAX_HZ = 4.0
 DEFAULT_FFT_LEN = 8192
-MIN_AC_AMPLITUDE = 100.0
+MIN_AC_AMPLITUDE = 50.0
+SNR_PEAK_GUARD_BINS = 2
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,21 @@ class RealtimeHrEstimate:
     status: str
     window_seconds: float
     elapsed_ms: float | None = None
+    snr_db: float | None = None
+
+
+def _spectral_snr_db(power: np.ndarray, peak_index: int) -> float | None:
+    """Return the peak-to-median-noise-floor ratio in dB."""
+    low = max(0, peak_index - SNR_PEAK_GUARD_BINS)
+    high = min(power.size, peak_index + SNR_PEAK_GUARD_BINS + 1)
+    residual = np.concatenate((power[:low], power[high:]))
+    if residual.size == 0:
+        return None
+    noise_floor = float(np.median(residual))
+    peak_power = float(power[peak_index])
+    if peak_power <= 0.0 or noise_floor <= 0.0:
+        return None
+    return round(10.0 * float(np.log10(peak_power / noise_floor)), 1)
 
 
 def estimate_green_fft_hr(
@@ -40,8 +56,7 @@ def estimate_green_fft_hr(
 
     values = np.asarray(samples[-needed:], dtype=float)
     values = values - float(np.mean(values))
-    if float(np.ptp(values)) < MIN_AC_AMPLITUDE:
-        return RealtimeHrEstimate(None, False, "weak", window_seconds)
+    amplitude_is_low = float(np.ptp(values)) < MIN_AC_AMPLITUDE
 
     windowed = values * np.hamming(values.size)
     spectrum = np.abs(np.fft.rfft(windowed, n=fft_len)) / values.size
@@ -51,11 +66,17 @@ def estimate_green_fft_hr(
         return RealtimeHrEstimate(None, False, "weak", window_seconds)
 
     band = spectrum[mask]
-    if band.size == 0 or float(np.max(band)) <= 0.0:
+    power = band ** 2
+    if power.size == 0 or float(np.max(power)) <= 0.0:
         return RealtimeHrEstimate(None, False, "weak", window_seconds)
 
-    bpm = float(freqs[mask][int(np.argmax(band))] * 60.0)
-    return RealtimeHrEstimate(round(bpm, 1), True, "ok", window_seconds)
+    peak_index = int(np.argmax(power))
+    snr_db = _spectral_snr_db(power, peak_index)
+    if amplitude_is_low:
+        return RealtimeHrEstimate(None, False, "weak", window_seconds, snr_db=snr_db)
+
+    bpm = float(freqs[mask][peak_index] * 60.0)
+    return RealtimeHrEstimate(round(bpm, 1), True, "ok", window_seconds, snr_db=snr_db)
 
 
 def timed_estimate_green_fft_hr(
@@ -72,4 +93,5 @@ def timed_estimate_green_fft_hr(
         status=estimate.status,
         window_seconds=estimate.window_seconds,
         elapsed_ms=round(elapsed_ms, 3),
+        snr_db=estimate.snr_db,
     )
