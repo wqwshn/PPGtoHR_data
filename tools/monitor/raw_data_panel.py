@@ -7,6 +7,7 @@ PPG Monitor - 原始传感器数据可视化面板
 from __future__ import annotations
 
 import csv
+import json
 import math
 import time
 from collections import deque
@@ -16,11 +17,12 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame, QPushButton,
 )
 import pyqtgraph as pg
 
 from protocol import RawDataPacket, StatusPacket
+from rf_events import RF_CSV_HEADER, event_row
 from raw_quality import DiagnosticSnapshot, RawQualityStats
 from realtime_hr import timed_estimate_green_fft_hr
 
@@ -29,7 +31,7 @@ from dashboard import (
     COLOR_BG, COLOR_CARD, COLOR_CARD_BORDER,
     COLOR_PRIMARY, COLOR_TEXT, COLOR_TEXT_DIM,
     COLOR_GREEN, COLOR_ORANGE, COLOR_RED,
-    TRANSLATIONS,
+    TRANSLATIONS, ui_font,
 )
 
 # 数据缓冲区大小 (存储量, 大于可见窗口以平滑过渡)
@@ -44,7 +46,8 @@ TIMELINE_CSV_HEADER = [
     "GyroX(dps)", "GyroY(dps)", "GyroZ(dps)",
     "PPG_Green", "PPG_Red", "PPG_IR",
 ]
-RAW_CSV_HEADER = TIMELINE_CSV_HEADER
+HF_NAMES = ("Uc1", "Uc2", "Ut1", "Ut2")
+RAW_CSV_HEADER = TIMELINE_CSV_HEADER + [f"{ch}_Median3(mV)" for ch in HF_NAMES] + ["Median3Valid"]
 QUALITY_EVENTS_CSV_HEADER = [
     "EventTime(s)", "EventType", "GapStartSampleIndex", "GapLen", "NextSeq", "PcMissingRaw",
 ]
@@ -201,8 +204,13 @@ class RawDataPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._lang = "zh"
+        self.setFont(ui_font())
 
         # 数据缓冲区
+        self._hf_history = {ch: deque(maxlen=3) for ch in HF_NAMES}
+        self._hf_smooth = {ch: deque(maxlen=PLOT_BUFFER) for ch in HF_NAMES}
+        self._smooth_display = True
+        self._median_seq = None
         self._data_Uc1 = deque(maxlen=PLOT_BUFFER)
         self._data_Uc2 = deque(maxlen=PLOT_BUFFER)
         self._data_Ut1 = deque(maxlen=PLOT_BUFFER)
@@ -238,6 +246,10 @@ class RawDataPanel(QWidget):
         self._csv_writer = None
         self._status_csv_file = None
         self._status_csv_writer = None
+        self._rf_csv_file = None
+        self._rf_csv_writer = None
+        self._rf_last = None
+        self._rf_path = None
         self._recording_start_time: Optional[float] = None
         self._recorded_sample_count = 0
         self._flush_counter = 0
@@ -270,8 +282,19 @@ class RawDataPanel(QWidget):
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setSpacing(6)
-        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setContentsMargins(0, 0, 0, 0)
 
+        self.smoothing_button = QPushButton("热膜显示：3点中值（点击切换原始）")
+        self.smoothing_button.setMinimumHeight(34)
+        self.smoothing_button.setFont(ui_font(10))
+        self.smoothing_button.setStyleSheet(
+            f"QPushButton {{ color: {COLOR_TEXT}; background: {COLOR_CARD}; "
+            f"border: 1px solid {COLOR_CARD_BORDER}; border-radius: 5px; padding: 6px 14px; }}"
+            f"QPushButton:hover {{ border-color: {COLOR_PRIMARY}; }}"
+        )
+        self.smoothing_button.setToolTip("仅影响四路热膜显示；CSV始终保存原始值和尾随3点中值。预热或丢帧后前2点中值为空。")
+        self.smoothing_button.clicked.connect(self._toggle_smoothing)
+        self.smoothing_button.hide() # Controlled by the compact toolbar title button.
         # 顶部信息条
         layout.addWidget(self._build_info_bar())
 
@@ -320,7 +343,7 @@ class RawDataPanel(QWidget):
         self._plot_Uc2, self._curve_Uc2 = self._make_plot("Uc2 (mV)", "#3B82F6")
         uc_layout.addWidget(self._plot_Uc1)
         uc_layout.addWidget(self._plot_Uc2)
-        layout.addWidget(uc_widget, 1)
+        layout.addWidget(uc_widget, 2)
 
         # MIMU 区域: 左=ACC, 右=GYRO (水平布局)
         imu_widget = QWidget()
@@ -345,63 +368,41 @@ class RawDataPanel(QWidget):
         layout.addWidget(imu_widget, 2)
 
     def _build_info_bar(self) -> QFrame:
-        """顶部状态信息条"""
         frame = QFrame()
         frame.setObjectName("card")
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(12, 6, 12, 6)
-
-        self._lbl_mode = QLabel("模式: --")
-        self._lbl_mode.setStyleSheet(
-            f"color: {COLOR_PRIMARY}; font-size: 13px; font-weight: bold;"
+        frame.setStyleSheet("QLabel { background: transparent; font-size: 9pt; font-weight: 400; }")
+        layout = QGridLayout(frame)
+        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setHorizontalSpacing(20)
+        layout.setVerticalSpacing(2)
+        fields = (
+            ("_lbl_mode", "模式: --", COLOR_PRIMARY, 0, 0),
+            ("_lbl_rate", "采样率: 接收 0 Hz | 设备 0 Hz", COLOR_TEXT, 0, 1),
+            ("_lbl_loss", "丢包率: 0.00% (0/0)", COLOR_TEXT, 0, 2),
+            ("_lbl_realtime_hr", "实时心率: --", COLOR_TEXT_DIM, 0, 3),
+            ("_lbl_diag", "诊断: --", COLOR_TEXT_DIM, 1, 0),
+            ("_lbl_calib", "", COLOR_GREEN, 1, 2),
+            ("_lbl_count", "数据包: 0", COLOR_TEXT_DIM, 1, 3),
         )
-        layout.addWidget(self._lbl_mode)
-
-        self._lbl_rate = QLabel("采样率: 接收 0 Hz | 设备 0 Hz")
-        self._lbl_rate.setStyleSheet(
-            f"color: {COLOR_ORANGE}; font-size: 13px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_rate)
-
-        self._lbl_loss = QLabel("丢包率: 0.00% (0/0)")
-        self._lbl_loss.setStyleSheet(
-            f"color: {COLOR_RED}; font-size: 13px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_loss)
-
-        self._lbl_realtime_hr = QLabel("实时心率: --")
-        self._lbl_realtime_hr.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 13px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_realtime_hr)
-
-        self._lbl_diag = QLabel("诊断: --")
-        self._lbl_diag.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 12px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_diag)
-
-        layout.addStretch()
-
-        self._lbl_calib = QLabel("")
-        self._lbl_calib.setStyleSheet(
-            f"color: {COLOR_GREEN}; font-size: 12px; font-weight: bold;"
-        )
-        self._lbl_calib.setVisible(False)
-        layout.addWidget(self._lbl_calib)
-
-        self._lbl_count = QLabel("数据包: 0")
-        self._lbl_count.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 12px;"
-        )
-        layout.addWidget(self._lbl_count)
-
+        for name, text, color, row, col in fields:
+            label = QLabel(text)
+            label.setFont(ui_font(9))
+            label.setStyleSheet(f"color: {color}; background: transparent;")
+            label.setWordWrap(False)
+            setattr(self, name, label)
+            layout.addWidget(label, row, col, 1, 2 if name == "_lbl_diag" else 1)
+        self._lbl_calib.hide()
+        for col in range(4):
+            layout.setColumnStretch(col, 1)
         return frame
 
     def _make_plot(self, title: str, color: str) -> tuple[pg.PlotWidget, pg.PlotDataItem]:
         """创建一个暗色风格的 pyqtgraph 绘图组件"""
         pw = pg.PlotWidget()
         pw.setTitle(title, color=COLOR_TEXT_DIM, size="10pt")
+        pw.getPlotItem().titleLabel.item.setFont(ui_font(10))
+        for axis in ("left", "bottom"):
+            pw.getAxis(axis).setStyle(tickFont=ui_font(9))
         pw.showGrid(x=True, y=True, alpha=0.12)
         pw.getAxis("left").setPen(pg.mkPen(COLOR_TEXT_DIM))
         pw.getAxis("bottom").setPen(pg.mkPen(COLOR_TEXT_DIM))
@@ -413,11 +414,29 @@ class RawDataPanel(QWidget):
 
     def _reset_quality_stats(self):
         self._quality.reset()
+        self._median_seq = None
+        for h in self._hf_history.values(): h.clear()
         self._last_missing_before = 0
         self._last_rx_hz = 0
         self._last_device_hz = 0
         self._last_expected_count = 0
         self._sample_count = 0
+
+    def _toggle_smoothing(self):
+        self._smooth_display = not self._smooth_display
+        self.smoothing_button.setText("热膜显示：3点中值（点击切换原始）" if self._smooth_display else "热膜显示：原始（点击切换中值）")
+        self._update_plots()
+
+    def _median_values(self, pkt):
+        if self._median_seq is None or (pkt.sequence-self._median_seq) % 65536 != 1:
+            for h in self._hf_history.values(): h.clear()
+        self._median_seq = pkt.sequence
+        values=[]
+        for ch in HF_NAMES:
+            h=self._hf_history[ch]; h.append(getattr(pkt,ch))
+            v=sorted(h)[1] if len(h)==3 else float('nan')
+            self._hf_smooth[ch].append(v); values.append(v)
+        return values, int(len(self._hf_history['Ut1'])==3)
 
     def handle_raw_data(self, pkt: RawDataPacket):
         """接收并缓存一个多光谱原始数据包"""
@@ -426,6 +445,7 @@ class RawDataPanel(QWidget):
         missing_before = self._quality.observe(pkt.sequence)
         self._last_missing_before = missing_before
 
+        median_values, median_valid = self._median_values(pkt)
         # 追加数据缓冲区
         self._data_Uc1.append(pkt.Uc1)
         self._data_Uc2.append(pkt.Uc2)
@@ -444,9 +464,10 @@ class RawDataPanel(QWidget):
         # CSV 实时写入
         if self._is_recording and self._csv_writer:
             sample_index = max(self._quality.expected_count - 1, 0)
-            self._csv_writer.writerows(
-                timeline_packet_to_csv_rows(pkt, sample_index, missing_before)
-            )
+            rows = timeline_packet_to_csv_rows(pkt, sample_index, missing_before)
+            for row in rows[:-1]: row.extend(["NaN"] * 4 + [0])
+            rows[-1].extend([round(v,5) for v in median_values] + [median_valid])
+            self._csv_writer.writerows(rows)
             self._recorded_sample_count += 1
             self._flush_counter += 1
             if self._flush_counter >= 100:
@@ -487,6 +508,18 @@ class RawDataPanel(QWidget):
                 f"color: {COLOR_ORANGE}; font-size: 12px; font-weight: bold;"
             )
 
+    def handle_rf_event(self, event, marker="live"):
+        self._rf_last = event
+        self.handle_calib_status(event.summary)
+        if self._is_recording:
+            if self._rf_csv_file is None:
+                self._rf_csv_file = self._rf_path.open("w", newline="", encoding="utf-8-sig")
+                self._rf_csv_writer = csv.writer(self._rf_csv_file)
+                self._rf_csv_writer.writerow(RF_CSV_HEADER)
+            elapsed = time.time() - self._recording_start_time
+            self._rf_csv_writer.writerow(event_row(event, elapsed, self._quality.expected_count-1, marker))
+            self._rf_csv_file.flush()
+
     def handle_status_data(self, status: StatusPacket):
         """处理固件 1Hz Raw 链路诊断状态帧。"""
         snapshot = self._quality.observe_status(status)
@@ -513,10 +546,10 @@ class RawDataPanel(QWidget):
         self._curve_ppg_ir.setData(list(self._data_ppg_ir)[-VISIBLE_POINTS:])
 
         # 桥压波形
-        self._curve_Ut1.setData(list(self._data_Ut1)[-VISIBLE_POINTS:])
-        self._curve_Ut2.setData(list(self._data_Ut2)[-VISIBLE_POINTS:])
-        self._curve_Uc1.setData(list(self._data_Uc1)[-VISIBLE_POINTS:])
-        self._curve_Uc2.setData(list(self._data_Uc2)[-VISIBLE_POINTS:])
+        self._curve_Ut1.setData(list(self._hf_smooth["Ut1"] if self._smooth_display else self._data_Ut1)[-VISIBLE_POINTS:])
+        self._curve_Ut2.setData(list(self._hf_smooth["Ut2"] if self._smooth_display else self._data_Ut2)[-VISIBLE_POINTS:])
+        self._curve_Uc1.setData(list(self._hf_smooth["Uc1"] if self._smooth_display else self._data_Uc1)[-VISIBLE_POINTS:])
+        self._curve_Uc2.setData(list(self._hf_smooth["Uc2"] if self._smooth_display else self._data_Uc2)[-VISIBLE_POINTS:])
 
         # 加速度计波形
         self._curve_accx.setData(list(self._data_Accx)[-VISIBLE_POINTS:])
@@ -560,7 +593,7 @@ class RawDataPanel(QWidget):
                 f"{estimate.window_seconds:.0f}s | {calc_text}"
             )
             self._lbl_realtime_hr.setStyleSheet(
-                f"color: {COLOR_GREEN}; font-size: 13px; font-weight: bold;"
+                f"color: {COLOR_GREEN}; font-size: 9pt; font-weight: 500; background: transparent;"
             )
             return
 
@@ -574,7 +607,7 @@ class RawDataPanel(QWidget):
             f"{t.get('realtime_hr', 'Realtime HR')}: -- ({status}) | {calc_text}"
         )
         self._lbl_realtime_hr.setStyleSheet(
-            f"color: {color}; font-size: 13px; font-weight: bold;"
+            f"color: {color}; font-size: 9pt; font-weight: 500; background: transparent;"
         )
 
     def _toggle_record(self, save_dir: Path = None) -> bool:
@@ -587,17 +620,39 @@ class RawDataPanel(QWidget):
                 save_dir = Path.home() / "Desktop"
             save_dir.mkdir(parents=True, exist_ok=True)
             path = save_dir / f"raw_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            raw_path, status_path = recording_output_paths(path)
-            self._csv_file = open(raw_path, "w", newline="", encoding="utf-8-sig")
+            base_path = path
+            suffix = 0
+            while True:
+                raw_path, status_path = recording_output_paths(path)
+                if not status_path.exists() and not path.with_name(path.stem + "_rf_events.csv").exists():
+                    try:
+                        self._csv_file = open(raw_path, "x", newline="", encoding="utf-8-sig")
+                        break
+                    except FileExistsError:
+                        pass
+                suffix += 1
+                path = base_path.with_name(f"{base_path.stem}_{suffix:02d}.csv")
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow(RAW_CSV_HEADER)
+            path.with_name(path.stem + "_processing.json").write_text(json.dumps({
+                "schema_version": 1, "sample_rate_hz": 100,
+                "raw_columns_unchanged": True, "channels": list(HF_NAMES),
+                "filter": "trailing_median", "window_samples": 3,
+                "time_alignment": "current sample; window center is 10 ms earlier",
+                "warmup": "first two samples NaN; Median3Valid=0",
+                "gap_policy": "reset on any nonconsecutive sequence",
+                "display_toggle_affects_recording": False
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
             self._status_csv_file = open(status_path, "w", newline="", encoding="utf-8-sig")
             self._status_csv_writer = csv.writer(self._status_csv_file)
             self._status_csv_writer.writerow(STATUS_CSV_HEADER)
+            self._rf_path = path.with_name(path.stem + "_rf_events.csv")
             self._recording_start_time = time.time()
             self._recorded_sample_count = 0
             self._reset_quality_stats()
             self._is_recording = True
+            if self._rf_last is not None:
+                self.handle_rf_event(self._rf_last, "recording_start_snapshot")
             self._flush_counter = 0
             return True
         else:
@@ -617,6 +672,12 @@ class RawDataPanel(QWidget):
             self._status_csv_file.close()
             self._status_csv_file = None
             self._status_csv_writer = None
+        if self._rf_csv_file:
+            self._rf_csv_file.flush()
+            self._rf_csv_file.close()
+            self._rf_csv_file = None
+            self._rf_csv_writer = None
+        self._rf_path = None
         self._recording_start_time = None
         self._recorded_sample_count = 0
 
@@ -636,6 +697,7 @@ class RawDataPanel(QWidget):
         ):
             d.clear()
 
+        for h in self._hf_smooth.values(): h.clear()
         self._packet_count = 0
         self._start_time = time.time()
         self._reset_quality_stats()
@@ -664,7 +726,7 @@ class RawDataPanel(QWidget):
         self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00% (0/0)")
         self._lbl_realtime_hr.setText(f"{t.get('realtime_hr', 'Realtime HR')}: --")
         self._lbl_realtime_hr.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 13px; font-weight: bold;"
+            f"color: {COLOR_TEXT_DIM}; font-size: 9pt; font-weight: 500; background: transparent;"
         )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
         self._lbl_diag.setText(f"{t.get('diag', 'Diag')}: --")
