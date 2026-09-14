@@ -1,6 +1,6 @@
-> 自动三轮模式已实现：BLE_RF_EXPERIMENT=1，60秒准备后按实际连接启动30秒正常段/30秒复位段，共3轮；事件与心跳另存 `_rf_events.csv`。详见 [自动三轮实验](自动三轮射频实验.md)。
+> 自动三轮模式已实现：BLE_RF_EXPERIMENT=1，60秒准备后按实际连接启动30秒正常段/30秒复位段，共3轮；事件与心跳另存 `_rf_events.csv`。详见 [自动三轮实验](experiments/archive/自动三轮射频实验.md)。
 
-> 2026-09-13 独立射频对照工作树：新增 BLE_RF_DISABLED（持续保持 BLE 硬件复位），UI 提供正常/关闭选择。实验步骤和硬件验证边界见 [蓝牙射频对照实验](蓝牙射频对照实验.md)。
+> 2026-09-13 独立射频对照工作树：新增 BLE_RF_DISABLED（持续保持 BLE 硬件复位），UI 提供正常/关闭选择。实验步骤和硬件验证边界见 [蓝牙射频对照实验](experiments/archive/蓝牙射频对照实验.md)。
 
 # PPG Monitor 统一上位机 UI 说明文档
 
@@ -359,7 +359,7 @@ tools/monitor/
 
 ## 2026-09-13 功率分档与双路采集（独立工作树）
 
-固件页面增加功率七段实验选项（ble_rf_disabled=3）及“打开双路采集窗口”按钮。两个窗口分别选择板载有线 COM 与 HJ-380 COM，默认保存到 recordings/wired 与 recordings/wireless；也可通过 --capture-link wired/wireless 打开。AA EE 事件新增功率阶段和读回确认，事件 CSV 追加 Experiment、TargetPower(dBm)、PowerVerified。Raw/STATUS 布局不变。同秒同目录录制不再覆盖已有文件；停止录制会关闭事件文件。实验过程及失败恢复见 [蓝牙功率分档实验](蓝牙功率分档实验.md)。
+固件页面增加功率七段实验选项（ble_rf_disabled=3）及“打开双路采集窗口”按钮。两个窗口分别选择板载有线 COM 与 HJ-380 COM，默认保存到 recordings/wired 与 recordings/wireless；也可通过 --capture-link wired/wireless 打开。AA EE 事件新增功率阶段和读回确认，事件 CSV 追加 Experiment、TargetPower(dBm)、PowerVerified。Raw/STATUS 布局不变。同秒同目录录制不再覆盖已有文件；停止录制会关闭事件文件。实验过程及失败恢复见 [蓝牙功率分档实验](experiments/archive/蓝牙功率分档实验.md)。
 
 
 ## 2026-09-13 功率指令应答自检
@@ -374,7 +374,7 @@ tools/monitor/
 
 ## 2026-09-13 固定-10 dBm连续采集
 
-新增固件选项ble_rf_disabled=6，对应BLE_FIXED_MINUS10=1。启动采样前只写一次ST_TX_POWER=-10，排除全量初始化及所有循环实验。不读回、不更改ADC，不在结束后恢复功率。详细操作见[固定负10dBm采集](固定负10dBm采集.md)。
+新增固件选项ble_rf_disabled=6，对应BLE_FIXED_MINUS10=1。启动采样前只写一次ST_TX_POWER=-10，排除全量初始化及所有循环实验。不读回、不更改ADC，不在结束后恢复功率。详细操作见[固定负10dBm采集](experiments/archive/固定负10dBm采集.md)。
 
 
 ## 固定-10配置前增加硬件复位
