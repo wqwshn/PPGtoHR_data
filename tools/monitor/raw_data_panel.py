@@ -16,7 +16,7 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame,
 )
 import pyqtgraph as pg
 
@@ -29,7 +29,7 @@ from dashboard import (
     COLOR_BG, COLOR_CARD, COLOR_CARD_BORDER,
     COLOR_PRIMARY, COLOR_TEXT, COLOR_TEXT_DIM,
     COLOR_GREEN, COLOR_ORANGE, COLOR_RED,
-    TRANSLATIONS,
+    TRANSLATIONS, ui_font,
 )
 
 # 数据缓冲区大小 (存储量, 大于可见窗口以平滑过渡)
@@ -201,6 +201,7 @@ class RawDataPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._lang = "zh"
+        self.setFont(ui_font())
 
         # 数据缓冲区
         self._data_Uc1 = deque(maxlen=PLOT_BUFFER)
@@ -345,63 +346,41 @@ class RawDataPanel(QWidget):
         layout.addWidget(imu_widget, 2)
 
     def _build_info_bar(self) -> QFrame:
-        """顶部状态信息条"""
         frame = QFrame()
         frame.setObjectName("card")
-        layout = QHBoxLayout(frame)
-        layout.setContentsMargins(12, 6, 12, 6)
-
-        self._lbl_mode = QLabel("模式: --")
-        self._lbl_mode.setStyleSheet(
-            f"color: {COLOR_PRIMARY}; font-size: 13px; font-weight: bold;"
+        frame.setStyleSheet("QLabel { background: transparent; font-size: 9pt; font-weight: 400; }")
+        layout = QGridLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setHorizontalSpacing(20)
+        layout.setVerticalSpacing(8)
+        fields = (
+            ("_lbl_mode", "模式: --", COLOR_PRIMARY, 0, 0),
+            ("_lbl_rate", "采样率: 接收 0 Hz | 设备 0 Hz", COLOR_TEXT, 0, 1),
+            ("_lbl_loss", "丢包率: 0.00% (0/0)", COLOR_TEXT, 0, 2),
+            ("_lbl_realtime_hr", "实时心率: --", COLOR_TEXT_DIM, 0, 3),
+            ("_lbl_diag", "诊断: --", COLOR_TEXT_DIM, 1, 0),
+            ("_lbl_calib", "", COLOR_GREEN, 1, 2),
+            ("_lbl_count", "数据包: 0", COLOR_TEXT_DIM, 1, 3),
         )
-        layout.addWidget(self._lbl_mode)
-
-        self._lbl_rate = QLabel("采样率: 接收 0 Hz | 设备 0 Hz")
-        self._lbl_rate.setStyleSheet(
-            f"color: {COLOR_ORANGE}; font-size: 13px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_rate)
-
-        self._lbl_loss = QLabel("丢包率: 0.00% (0/0)")
-        self._lbl_loss.setStyleSheet(
-            f"color: {COLOR_RED}; font-size: 13px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_loss)
-
-        self._lbl_realtime_hr = QLabel("实时心率: --")
-        self._lbl_realtime_hr.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 13px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_realtime_hr)
-
-        self._lbl_diag = QLabel("诊断: --")
-        self._lbl_diag.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 12px; font-weight: bold;"
-        )
-        layout.addWidget(self._lbl_diag)
-
-        layout.addStretch()
-
-        self._lbl_calib = QLabel("")
-        self._lbl_calib.setStyleSheet(
-            f"color: {COLOR_GREEN}; font-size: 12px; font-weight: bold;"
-        )
-        self._lbl_calib.setVisible(False)
-        layout.addWidget(self._lbl_calib)
-
-        self._lbl_count = QLabel("数据包: 0")
-        self._lbl_count.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 12px;"
-        )
-        layout.addWidget(self._lbl_count)
-
+        for name, text, color, row, col in fields:
+            label = QLabel(text)
+            label.setFont(ui_font(9))
+            label.setStyleSheet(f"color: {color}; background: transparent;")
+            label.setWordWrap(True)
+            setattr(self, name, label)
+            layout.addWidget(label, row, col, 1, 2 if name == "_lbl_diag" else 1)
+        self._lbl_calib.hide()
+        for col in range(4):
+            layout.setColumnStretch(col, 1)
         return frame
 
     def _make_plot(self, title: str, color: str) -> tuple[pg.PlotWidget, pg.PlotDataItem]:
         """创建一个暗色风格的 pyqtgraph 绘图组件"""
         pw = pg.PlotWidget()
         pw.setTitle(title, color=COLOR_TEXT_DIM, size="10pt")
+        pw.getPlotItem().titleLabel.item.setFont(ui_font(10))
+        for axis in ("left", "bottom"):
+            pw.getAxis(axis).setStyle(tickFont=ui_font(9))
         pw.showGrid(x=True, y=True, alpha=0.12)
         pw.getAxis("left").setPen(pg.mkPen(COLOR_TEXT_DIM))
         pw.getAxis("bottom").setPen(pg.mkPen(COLOR_TEXT_DIM))
@@ -560,7 +539,7 @@ class RawDataPanel(QWidget):
                 f"{estimate.window_seconds:.0f}s | {calc_text}"
             )
             self._lbl_realtime_hr.setStyleSheet(
-                f"color: {COLOR_GREEN}; font-size: 13px; font-weight: bold;"
+                f"color: {COLOR_GREEN}; font-size: 9pt; font-weight: 500; background: transparent;"
             )
             return
 
@@ -574,7 +553,7 @@ class RawDataPanel(QWidget):
             f"{t.get('realtime_hr', 'Realtime HR')}: -- ({status}) | {calc_text}"
         )
         self._lbl_realtime_hr.setStyleSheet(
-            f"color: {color}; font-size: 13px; font-weight: bold;"
+            f"color: {color}; font-size: 9pt; font-weight: 500; background: transparent;"
         )
 
     def _toggle_record(self, save_dir: Path = None) -> bool:
@@ -664,7 +643,7 @@ class RawDataPanel(QWidget):
         self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00% (0/0)")
         self._lbl_realtime_hr.setText(f"{t.get('realtime_hr', 'Realtime HR')}: --")
         self._lbl_realtime_hr.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 13px; font-weight: bold;"
+            f"color: {COLOR_TEXT_DIM}; font-size: 9pt; font-weight: 500; background: transparent;"
         )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
         self._lbl_diag.setText(f"{t.get('diag', 'Diag')}: --")

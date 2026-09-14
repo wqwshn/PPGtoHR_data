@@ -105,29 +105,39 @@ void Error_Handler(void);
 /* 工作模式选择 */
 #define MODE_HEART_RATE 0
 #define MODE_SPO2       1
+#ifndef CURRENT_WORK_MODE
 #define CURRENT_WORK_MODE    MODE_HEART_RATE   /* 0=心率模式, 1=血氧模式 */
+#endif
 
 /* 数据发送模式选择 (两种模式互斥, 不会同时发送)
  * 0 = 在线心率模式: 运行算法, 仅发送 1Hz HR 结果包 (0xAA 0xCC) [仅125Hz]
  * 1 = 原始数据模式: 仅发送原始数据包 (0xAA 0xBB), 不运行算法 [所有采样率]
  */
+#ifndef ENABLE_RAW_DATA_PACKET
 #define ENABLE_RAW_DATA_PACKET  1
+#endif
 
 /* HJ-131IMH BLE 配置开关:
  * 0 = 上电不发送 BLE 配置指令
  * 1 = 上电复位 BLE 模块后发送固定配置指令
  */
+#ifndef ENABLE_BLE_CONFIG
 #define ENABLE_BLE_CONFIG       0
+#endif
 
-/* PPG 通道选择: 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
+/* PPG 通道选择: 0=禁用PPG（两路IIC关闭，PPG字段填0）, 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
+#ifndef PPG_DEFAULT_CHANNEL
 #define PPG_DEFAULT_CHANNEL     2
+#endif
 
 /* PPG 采样率 (Hz): 50 / 100 / 125
  * 50Hz:  内部 800sps / 16x 硬件平均 = 50sps
  * 100Hz: 内部 800sps / 8x  硬件平均 = 100sps
  * 125Hz: 内部 1000sps / 4x 硬件平均 = 250sps, MCU 125Hz 读取
  */
+#ifndef PPG_SAMPLE_RATE
 #define PPG_SAMPLE_RATE         100
+#endif
 
 /* ============================================================ */
 

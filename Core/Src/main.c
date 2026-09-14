@@ -210,12 +210,15 @@ int main(void)
 
   /* 1. MAX30101 检测 (通过通道接口) */
   PPG_SetChannel(PPG_DEFAULT_CHANNEL);
+#if (PPG_DEFAULT_CHANNEL != 0)
   if (PPG_Check() != 0) {
       HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MAX30101 Found!\r\n", 24, 100);
       HAL_Delay(100);
   } else {
       HAL_UART_Transmit(&huart2, (uint8_t*)"ERROR: MAX30101 Check Failed!\r\n", 31, 100);
   }
+
+#endif /* PPG enabled */
 
   /* 2. ADC 检测 (阻塞式) */
   while (!ADC_check()) {
@@ -256,6 +259,7 @@ int main(void)
   /* 2.2 陀螺仪零偏标定 (暖机+800样本+std校验+Flash存储) */
   MIMU_GyroCalibrate();
 
+#if (PPG_DEFAULT_CHANNEL != 0)
   /* 3. MAX30101 初始化 (通过通道接口) */
   HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before MAX30101_Init\r\n", 28, 1000);
   PPG_Init();
@@ -272,6 +276,8 @@ int main(void)
   PPG_Config_Green_Hardcoded();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG HR Mode Config.\r\n", 28, 100);
 #endif
+
+#endif /* PPG enabled */
 
   /* ====================================================================
    * 心率在线算法初始化 (仅在线心率模式)
@@ -436,7 +442,10 @@ int main(void)
           allData[GYRO_START_INDEX + 5] = (uint8_t)(gz & 0xFF);
       }
 
-      /* --- 3. PPG 数据采集 --- */
+      /* --- 3. PPG 数据采集；禁用时固定填充9字节零，不访问FIFO --- */
+#if (PPG_DEFAULT_CHANNEL == 0)
+      memset(&allData[PPG_START_INDEX], 0, 9);
+#else
       uint8_t wr_ptr = PPG_ReadOneByte(FIFO_WR_PTR_REG);
       uint8_t rd_ptr = PPG_ReadOneByte(FIFO_RD_PTR_REG);
       uint8_t sample_count = (wr_ptr - rd_ptr) & 0x1F;
@@ -559,6 +568,8 @@ int main(void)
       }
 #endif /* !ENABLE_RAW_DATA_PACKET */
 #endif
+
+#endif /* PPG enabled */
 
       /* --- 4. Raw采样序号 (bytes[31..32], 固件侧采样周期) --- */
       allData[RAW_SEQUENCE_START_INDEX] = (uint8_t)(raw_packet_seq >> 8);

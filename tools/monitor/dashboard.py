@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer, pyqtProperty, QSize
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QFontDatabase
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QComboBox, QPushButton, QProgressBar, QStatusBar,
@@ -178,7 +178,7 @@ DARK_QSS = f"""
 QMainWindow, QWidget {{
     background-color: {COLOR_BG};
     color: {COLOR_TEXT};
-    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 10pt;
 }}
 QFrame#card {{
     background-color: {COLOR_CARD};
@@ -194,8 +194,8 @@ QPushButton {{
     border: none;
     border-radius: 6px;
     padding: 6px 16px;
-    font-size: 13px;
-    font-weight: bold;
+    font-size: 10pt;
+    font-weight: 500;
 }}
 QPushButton:hover {{
     background-color: #0EA5C9;
@@ -252,8 +252,8 @@ QPushButton#btn_panel_switch {{
     border: 1px solid #2A3A4E;
     border-radius: 6px;
     padding: 6px 20px;
-    font-size: 13px;
-    font-weight: bold;
+    font-size: 10pt;
+    font-weight: 500;
     min-width: 70px;
 }}
 QPushButton#btn_panel_switch:checked {{
@@ -265,6 +265,15 @@ QPushButton#btn_panel_switch:hover {{
     background-color: #0EA5C9;
 }}
 """
+
+
+def ui_font(size: int = 10) -> QFont:
+    families = QFontDatabase().families()
+    family = next((name for name in ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI")
+                   if name in families), "sans-serif")
+    font = QFont(family, size)
+    font.setStyleHint(QFont.SansSerif)
+    return font
 
 
 def hr_color(bpm: float) -> str:
@@ -331,14 +340,10 @@ class MonitorWindow(QMainWindow):
         if not self._save_dir.exists():
             self._save_dir = Path.home()
 
-        # 创建子面板
-        self._hr_panel = HRPanel(self)
+        self.setFont(ui_font())
+        self._connected = False
+        self._simulating = False
         self._raw_panel = self._create_raw_panel()
-
-        # 面板堆叠
-        self._panel_stack = QStackedWidget()
-        self._panel_stack.addWidget(self._hr_panel)     # index 0
-        self._panel_stack.addWidget(self._raw_panel)    # index 1
 
         # 主布局
         central = QWidget()
@@ -347,20 +352,15 @@ class MonitorWindow(QMainWindow):
         root.setSpacing(8)
         root.setContentsMargins(12, 8, 12, 8)
         root.addWidget(self._build_toolbar())
-        root.addWidget(self._panel_stack, 1)
+        root.addWidget(self._raw_panel, 1)
 
         # 状态栏
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
-        self._status_label = QLabel("Disconnected")
+        self._status_label = QLabel(TRANSLATIONS[self._lang]["disconnected"])
         self._status_bar.addPermanentWidget(self._status_label, 1)
 
         self.setStyleSheet(DARK_QSS)
-
-        # 模拟定时器 (HR 面板)
-        self._sim_timer = QTimer(self)
-        self._sim_timer.timeout.connect(self._hr_panel._sim_tick)
-        self._hr_sim_running = False
 
     def _create_raw_panel(self):
         """延迟导入避免循环依赖"""
@@ -371,159 +371,70 @@ class MonitorWindow(QMainWindow):
 
     def _build_toolbar(self) -> QFrame:
         frame = QFrame()
+        frame.setObjectName("toolbar")
+        frame.setStyleSheet(f"""
+            QFrame#toolbar {{ background: {COLOR_CARD}; border: 1px solid {COLOR_CARD_BORDER}; border-radius: 10px; }}
+            QFrame#toolbar QLabel {{ background: transparent; }}
+            QPushButton {{ font-size: 10pt; font-weight: 500; padding: 0 14px; border-radius: 6px; }}
+            QPushButton[secondary="true"] {{ background: #243447; color: {COLOR_TEXT}; border: 1px solid #35485E; }}
+            QPushButton[secondary="true"]:hover {{ background: #30465D; }}
+            QPushButton:disabled {{ background: #202D3D; color: #6F8297; border: none; }}
+            QPushButton#btn_record {{ background: #DC4655; }}
+            QPushButton#btn_record:hover {{ background: #EB5867; }}
+            QPushButton#btn_record[recording="true"] {{ background: #AD2938; border: 1px solid #FF8790; }}
+            QComboBox {{ font-size: 10pt; padding: 0 12px; background: {COLOR_BG}; }}
+        """)
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(0, 4, 0, 4)
-
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(10)
         t = TRANSLATIONS[self._lang]
-
-        # 连接状态灯
-        self._status_dot = StatusDot()
-        layout.addWidget(self._status_dot)
-
-        # 串口选择
+        self._page_title = QLabel(t["panel_raw"])
+        self._page_title.setStyleSheet("font-size: 12pt; font-weight: 600; padding-right: 10px;")
+        layout.addWidget(self._page_title)
         self._combo_port = QComboBox()
+        self._combo_port.setMinimumWidth(160)
+        self._combo_port.setFixedHeight(38)
         layout.addWidget(self._combo_port)
 
-        self._btn_connect = QPushButton(t["connect"])
-        layout.addWidget(self._btn_connect)
+        def button(text, secondary=False):
+            btn = QPushButton(text)
+            btn.setProperty("secondary", secondary)
+            btn.setFixedHeight(38)
+            layout.addWidget(btn)
+            return btn
 
-        self._btn_disconnect = QPushButton(t["disconnect"])
-        self._btn_disconnect.setObjectName("btn_disconnect")
+        self._btn_connect = button(t["connect"])
+        self._btn_disconnect = button(t["disconnect"], True)
         self._btn_disconnect.setEnabled(False)
-        layout.addWidget(self._btn_disconnect)
-
-        self._btn_refresh = QPushButton(t["refresh"])
+        self._btn_refresh = button(t["refresh"], True)
         self._btn_refresh.clicked.connect(self.refresh_ports)
-        layout.addWidget(self._btn_refresh)
-
-        # 分隔线
-        sep1 = QFrame()
-        sep1.setFrameShape(QFrame.VLine)
-        sep1.setStyleSheet(f"color: {COLOR_CARD_BORDER};")
-        layout.addWidget(sep1)
-
-        # 面板切换按钮
-        self._btn_hr_panel = QPushButton(t["panel_hr"])
-        self._btn_hr_panel.setCheckable(True)
-        self._btn_hr_panel.setChecked(True)
-        self._btn_hr_panel.setObjectName("btn_panel_switch")
-
-        self._btn_raw_panel = QPushButton(t["panel_raw"])
-        self._btn_raw_panel.setCheckable(True)
-        self._btn_raw_panel.setObjectName("btn_panel_switch")
-
-        self._panel_group = QButtonGroup(self)
-        self._panel_group.addButton(self._btn_hr_panel, 0)
-        self._panel_group.addButton(self._btn_raw_panel, 1)
-        self._panel_group.buttonClicked[int].connect(self._switch_panel)
-
-        layout.addWidget(self._btn_hr_panel)
-        layout.addWidget(self._btn_raw_panel)
-
-        # 分隔线
-        sep2 = QFrame()
-        sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet(f"color: {COLOR_CARD_BORDER};")
-        layout.addWidget(sep2)
-
-        # 清屏
-        self._btn_clear = QPushButton(t["clear"])
-        self._btn_clear.setObjectName("btn_clear")
-        self._btn_clear.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR_ORANGE};
-                color: white; border: none; border-radius: 6px;
-                padding: 6px 16px; font-size: 13px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #EA7B1A; }}
-        """)
+        sep = QFrame()
+        sep.setFixedSize(1, 26)
+        sep.setStyleSheet(f"background: {COLOR_CARD_BORDER};")
+        layout.addWidget(sep)
+        self._btn_clear = button(t["clear"], True)
         self._btn_clear.clicked.connect(self._clear_active_panel)
-        layout.addWidget(self._btn_clear)
-
-        # 保存路径
-        self._btn_save_path = QPushButton(self._save_dir.name)
-        self._btn_save_path.setFixedWidth(80)
+        self._btn_save_path = button(t["select_save_path"], True)
         self._btn_save_path.setToolTip(str(self._save_dir))
-        self._btn_save_path.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR_CARD}; color: {COLOR_TEXT_DIM};
-                border: 1px solid {COLOR_CARD_BORDER}; border-radius: 4px;
-                padding: 6px 8px; font-size: 11px;
-            }}
-            QPushButton:hover {{ background-color: #2A3A4E; }}
-        """)
         self._btn_save_path.clicked.connect(self._browse_save_dir)
-        layout.addWidget(self._btn_save_path)
-
-        # 录制
-        self._btn_record = QPushButton(t["record"])
+        self._btn_record = button(t["record"])
         self._btn_record.setObjectName("btn_record")
-        self._btn_record.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {COLOR_RED};
-                color: white; border: none; border-radius: 6px;
-                padding: 6px 16px; font-size: 13px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #DC2626; }}
-        """)
         self._btn_record.clicked.connect(self._toggle_record_active)
-        layout.addWidget(self._btn_record)
-
         layout.addStretch()
-
-        # 语言切换
-        self._btn_lang = QPushButton(t["lang"])
-        self._btn_lang.setFixedWidth(60)
-        self._btn_lang.setStyleSheet(f"""
-            QPushButton {{
-                background-color: #4B5563; color: white; border: none;
-                border-radius: 6px; padding: 6px 10px;
-                font-size: 12px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background-color: #6B7280; }}
-        """)
-        self._btn_lang.clicked.connect(self._toggle_language)
-        layout.addWidget(self._btn_lang)
-
-        # 状态文字
+        self._status_dot = StatusDot()
+        layout.addWidget(self._status_dot)
         self._conn_label = QLabel(t["disconnected"])
-        self._conn_label.setStyleSheet(f"color: {COLOR_TEXT_DIM}; font-size: 12px;")
         layout.addWidget(self._conn_label)
-
+        self._btn_lang = button(t["lang"], True)
+        self._btn_lang.clicked.connect(self._toggle_language)
         return frame
 
-    # ── 面板切换 ─────────────────────────────────────────
-
-    def _switch_panel(self, index: int):
-        self._panel_stack.setCurrentIndex(index)
-        self._update_record_button()
-
     def _update_record_button(self):
-        """根据当前活动面板更新录制按钮外观"""
-        t = TRANSLATIONS[self._lang]
-        idx = self._panel_stack.currentIndex()
-        is_rec = self._hr_panel.is_recording if idx == 0 else self._raw_panel.is_recording
-
-        if is_rec:
-            self._btn_record.setText(t["stop"])
-            self._btn_record.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COLOR_RED}; color: white;
-                    border: 2px solid #FF0000; border-radius: 6px;
-                    padding: 6px 16px; font-size: 13px; font-weight: bold;
-                }}
-                QPushButton:hover {{ background-color: #B91C1C; }}
-            """)
-        else:
-            self._btn_record.setText(t["record"])
-            self._btn_record.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {COLOR_RED}; color: white;
-                    border: none; border-radius: 6px;
-                    padding: 6px 16px; font-size: 13px; font-weight: bold;
-                }}
-                QPushButton:hover {{ background-color: #DC2626; }}
-            """)
+        recording = self._raw_panel.is_recording
+        self._btn_record.setText(TRANSLATIONS[self._lang]["stop" if recording else "record"])
+        self._btn_record.setProperty("recording", recording)
+        self._btn_record.style().unpolish(self._btn_record)
+        self._btn_record.style().polish(self._btn_record)
 
     def _browse_save_dir(self):
         """浏览选择保存目录"""
@@ -533,7 +444,7 @@ class MonitorWindow(QMainWindow):
         )
         if path:
             self._save_dir = Path(path)
-            self._btn_save_path.setText(self._save_dir.name)
+            self._btn_save_path.setText(t["select_save_path"])
             self._btn_save_path.setToolTip(str(self._save_dir))
 
     # ── 公共接口 ─────────────────────────────────────────
@@ -545,20 +456,23 @@ class MonitorWindow(QMainWindow):
         self._combo_port.clear()
         ports = [p.device for p in serial.tools.list_ports.comports()]
         if ports:
-            self._combo_port.addItems(ports)
+            for port in ports:
+                self._combo_port.addItem(port, port)
         else:
-            self._combo_port.addItem(t["no_ports"])
+            self._combo_port.addItem(t["no_ports"], None)
 
     def set_connected(self, connected: bool):
         """更新连接状态 UI"""
         t = TRANSLATIONS[self._lang]
+        self._connected = connected
         self._status_dot.set_connected(connected)
         self._btn_connect.setEnabled(not connected)
         self._btn_disconnect.setEnabled(connected)
         self._combo_port.setEnabled(not connected)
         self._conn_label.setText(t["connected"] if connected else t["disconnected"])
+        self._status_label.setText(self._conn_label.text())
         self._conn_label.setStyleSheet(
-            f"color: {COLOR_GREEN if connected else COLOR_TEXT_DIM}; font-size: 12px;"
+            f"color: {COLOR_GREEN if connected else COLOR_TEXT_DIM};"
         )
 
     def show_error(self, msg: str):
@@ -571,20 +485,13 @@ class MonitorWindow(QMainWindow):
     # ── 委托操作 ─────────────────────────────────────────
 
     def _clear_active_panel(self):
-        idx = self._panel_stack.currentIndex()
-        if idx == 0:
-            self._hr_panel._clear_screen()
-        else:
-            self._raw_panel._clear_screen()
+        self._raw_panel._clear_screen()
+        self._update_record_button()
         t = TRANSLATIONS[self._lang]
         self._status_label.setText(t["clear_confirm"])
 
     def _toggle_record_active(self):
-        idx = self._panel_stack.currentIndex()
-        if idx == 0:
-            self._hr_panel._toggle_record(self._save_dir)
-        else:
-            self._raw_panel._toggle_record(self._save_dir)
+        self._raw_panel._toggle_record(self._save_dir)
         self._update_record_button()
 
     def _toggle_language(self):
@@ -599,34 +506,33 @@ class MonitorWindow(QMainWindow):
         self._btn_refresh.setText(t["refresh"])
         self._btn_clear.setText(t["clear"])
         self._btn_lang.setText(t["lang"])
-        self._btn_hr_panel.setText(t["panel_hr"])
-        self._btn_raw_panel.setText(t["panel_raw"])
+        self._page_title.setText(t["panel_raw"])
+        self._btn_save_path.setText(t["select_save_path"])
         self._update_record_button()
-        self._hr_panel._apply_language(self._lang)
         self._raw_panel._apply_language(self._lang)
-        self._status_label.setText(t["disconnected"])
+        state = "simulated" if self._simulating else "connected" if self._connected else "disconnected"
+        self._conn_label.setText(t[state])
+        self._status_label.setText(t[state])
+        if self._combo_port.count() == 1 and self._combo_port.currentData() is None:
+            self._combo_port.setItemText(0, t["no_ports"])
 
     # ── 模拟模式 ─────────────────────────────────────────
 
-    def start_hr_simulation(self):
-        self._hr_panel._sim_step = 0
-        self._sim_timer.start(1000)
-        self._hr_sim_running = True
-        self.set_connected(True)
-        t = TRANSLATIONS[self._lang]
-        self._conn_label.setText(t["simulated"])
-
     def start_raw_simulation(self):
+        self._simulating = True
         self._raw_panel.start_simulation()
         self.set_connected(True)
-        t = TRANSLATIONS[self._lang]
-        self._conn_label.setText(t["simulated"])
-        self._btn_raw_panel.setChecked(True)
-        self._switch_panel(1)
+        self._conn_label.setText(TRANSLATIONS[self._lang]["simulated"])
+        self._status_label.setText(self._conn_label.text())
 
     def stop_simulations(self):
-        self._sim_timer.stop()
+        self._simulating = False
         self._raw_panel.stop_simulation()
+
+    def closeEvent(self, event):
+        self.stop_simulations()
+        self._raw_panel._stop_recording()
+        super().closeEvent(event)
 
 
 # ── 在线心率面板 ──────────────────────────────────────────

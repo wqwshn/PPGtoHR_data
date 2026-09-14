@@ -51,24 +51,33 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, I2C_SCL1_Pin|I2C_SDA1_Pin|V5_0_CE_Pin|V1_8_CE_Pin
+  HAL_GPIO_WritePin(GPIOA, V5_0_CE_Pin|V1_8_CE_Pin
                           |AD_RESET_Pin|DEN_A_G_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, SPI1_NSS_Pin|START_CONV_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, I2C_SCL2_Pin|I2C_SDA2_Pin|CS_M_Pin, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, CS_M_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, BLE_RST_Pin|CS_A_G_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pins : PAPin PAPin */
+#if (PPG_DEFAULT_CHANNEL != 0)
+  HAL_GPIO_WritePin(GPIOA, I2C_SCL1_Pin|I2C_SDA1_Pin, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = I2C_SCL1_Pin|I2C_SDA1_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+#else
+  /* No PPG: both software-IIC buses remain analog/high impedance. */
+  GPIO_InitStruct.Pin = I2C_SCL1_Pin|I2C_SDA1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+#endif
 
   /*Configure GPIO pin : PtPin */
   GPIO_InitStruct.Pin = SPI1_NSS_Pin;
@@ -78,11 +87,20 @@ void MX_GPIO_Init(void)
   HAL_GPIO_Init(SPI1_NSS_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PBPin PBPin */
+#if (PPG_DEFAULT_CHANNEL != 0)
+  HAL_GPIO_WritePin(GPIOB, I2C_SCL2_Pin|I2C_SDA2_Pin, GPIO_PIN_SET);
   GPIO_InitStruct.Pin = I2C_SCL2_Pin|I2C_SDA2_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+#else
+  /* No PPG: both software-IIC buses remain analog/high impedance. */
+  GPIO_InitStruct.Pin = I2C_SCL2_Pin|I2C_SDA2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_ANALOG;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+#endif
 
   /*Configure GPIO pins : PBPin PBPin PBPin PBPin
                            PBPin */
