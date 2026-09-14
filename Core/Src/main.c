@@ -70,6 +70,10 @@ uint8_t DOUT[4] = {0, 0, 0, 0};
 uint8_t allData[50] = {0};
 static uint8_t statusData[STATUS_PACKET_LEN] = {0};
 static uint16_t raw_packet_seq = 0;
+#if BLE_BATCH5
+#include "raw_batch.h"
+static RawBatch raw_batch;
+#endif
 static volatile uint8_t raw_diag_status_pending = 0;
 static volatile uint8_t raw_diag_dma_tx_kind = 0;
 static volatile uint32_t raw_diag_sample_counter = 0;
@@ -83,6 +87,9 @@ static volatile uint32_t raw_diag_adc_error_counter = 0;
 static volatile uint32_t raw_diag_imu_error_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_empty_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_overflow_counter = 0;
+
+#include "ble_experiment_transport.h"
+#include "ble_power_transport.h"
 
 /* ADC 相关 */
 uint8_t Utop_times1 = 0;
@@ -119,7 +126,7 @@ static void PPG_Config_SpO2_Hardcoded(void);
 #endif
 static void PPG_Config_Green_Hardcoded(void);
 
-#if (ENABLE_BLE_CONFIG)
+#if (ENABLE_BLE_CONFIG && !BLE_RF_DISABLED)
 static void BLE_Init(void);
 static void BLE_ResetModule(void);
 static void BLE_SendConfigCommand(const uint8_t *cmd, uint16_t len);
@@ -190,7 +197,7 @@ int main(void)
   /* ====================================================================
    * 蓝牙模块初始化
    * ==================================================================== */
-#if (ENABLE_BLE_CONFIG)
+#if (ENABLE_BLE_CONFIG && !BLE_RF_DISABLED)
   BLE_Init();
   HAL_Delay(200);
   {
@@ -199,7 +206,11 @@ int main(void)
   }
 #else
   {
-      static const uint8_t msg[] = "DEBUG: BLE Config Disabled\r\n";
+#if BLE_RF_DISABLED
+      static const uint8_t msg[] = "DEBUG: BLE RF OFF - hardware reset held HIGH\r\n";
+#else
+      static const uint8_t msg[] = "DEBUG: BLE RF ON - existing module config\r\n";
+#endif
       HAL_UART_Transmit(&huart2, (uint8_t*)msg, sizeof(msg) - 1, 1000);
   }
 #endif
@@ -209,6 +220,33 @@ int main(void)
    * ==================================================================== */
 
   /* 1. MAX30101 检测 (通过通道接口) */
+#if BLE_FIXED_MINUS10 || BLE_BATCH5 || BLE_SINGLE25
+  /* Reset/release BLE before configuring, prior to ADC/Raw streaming.
+   * Hardware reset preserves settings; no factory reset or readback. */
+  {
+      static const uint8_t wake[] = {0xAA,0xAA,0xAA,0xAA};
+#if BLE_BATCH5 || BLE_SINGLE25
+      static const uint8_t power[] = "<ST_TX_POWER=2.5>";
+#if BLE_SINGLE25
+      static const uint8_t note[] = "DEBUG: BLE target +2.5 dBm UNVERIFIED; RAW single frame / 10 ms\r\n";
+#else
+      static const uint8_t note[] = "DEBUG: BLE target +2.5 dBm UNVERIFIED; RAW batch 5 / 50 ms\r\n";
+#endif
+#else
+      static const uint8_t power[] = "<ST_TX_POWER=-10>";
+      static const uint8_t note[] = "DEBUG: BLE target -10 dBm written; UNVERIFIED\r\n";
+#endif
+      HAL_GPIO_WritePin(BLE_RST_GPIO_Port,BLE_RST_Pin,GPIO_PIN_SET);
+      HAL_Delay(100);
+      HAL_GPIO_WritePin(BLE_RST_GPIO_Port,BLE_RST_Pin,GPIO_PIN_RESET);
+      HAL_Delay(300);
+      if (HAL_UART_Transmit(&huart2,(uint8_t *)wake,sizeof(wake),100)!=HAL_OK) Error_Handler();
+      HAL_Delay(2);
+      if (HAL_UART_Transmit(&huart2,(uint8_t *)power,sizeof(power)-1,100)!=HAL_OK) Error_Handler();
+      HAL_Delay(100);
+      HAL_UART_Transmit(&huart2,(uint8_t *)note,sizeof(note)-1,100);
+  }
+#endif
   PPG_SetChannel(PPG_DEFAULT_CHANNEL);
 #if (PPG_DEFAULT_CHANNEL != 0)
   if (PPG_Check() != 0) {
@@ -303,6 +341,9 @@ int main(void)
   /* 4. 启动定时器 (最后一步开启中断) */
   ADC_1to4Voltage_flag = 0;
 
+#if BLE_RF_EXPERIMENT || BLE_POWER_EXPERIMENT
+  RF_Start();
+#endif
   HAL_TIM_Base_Start_IT(&htim16); // ADC + MIMU tick
 
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: System Start Loop...\r\n", 29, 1000);
@@ -313,6 +354,9 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+#if BLE_RF_EXPERIMENT || BLE_POWER_EXPERIMENT
+    RF_Poll();
+#endif
 #if (!ENABLE_RAW_DATA_PACKET)
     /* ---- 在线心率模式: 每秒执行一次解算并发送 HR 结果包 ---- */
     if (algorithm_initialized && hr_state.flag_1s_ready) {
@@ -584,6 +628,24 @@ int main(void)
       /* --- 7. DMA 发送 (35 字节) --- */
 #if (ENABLE_RAW_DATA_PACKET)
       raw_diag_frame_counter++;
+#if BLE_BATCH5
+      /* Short critical section: serialize UART completion and batch ownership.
+       * DMA continues during subsequent acquisition; never transmit allData. */
+      uint32_t irq_mask = __get_PRIMASK();
+      __disable_irq();
+      int batch_ready = RawBatch_Push(&raw_batch, allData, huart2.gState == HAL_UART_STATE_READY);
+      if (batch_ready == 1) {
+          raw_diag_dma_tx_kind = 1;
+          HAL_StatusTypeDef result = HAL_UART_Transmit_DMA(&huart2, raw_batch.tx, sizeof(raw_batch.tx));
+          if (result == HAL_OK) raw_diag_tx_start_counter += 5;
+          else {
+              raw_diag_dma_tx_kind = 0;
+              if (result == HAL_BUSY) raw_diag_tx_busy_counter += 5;
+              else raw_diag_tx_error_counter += 5;
+          }
+      } else if (batch_ready < 0) raw_diag_tx_busy_counter += 5;
+      __set_PRIMASK(irq_mask);
+#else
       HAL_StatusTypeDef tx_status = HAL_UART_Transmit_DMA(&huart2, allData, PACKET_LEN);
       if (tx_status == HAL_OK) {
           raw_diag_tx_start_counter++;
@@ -593,6 +655,7 @@ int main(void)
       } else {
           raw_diag_tx_error_counter++;
       }
+#endif /* BLE_BATCH5 */
       raw_packet_seq++;
 #endif
 
@@ -656,7 +719,7 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 // 蓝牙配置。当前硬件调试口与 BLE 共用 UART, 不在固件内读回应答。
-#if (ENABLE_BLE_CONFIG)
+#if (ENABLE_BLE_CONFIG && !BLE_RF_DISABLED)
 static void BLE_Init(void)
 {
     static const uint8_t CMD_FACTORY[]     = "<ST_FACTORY>";
@@ -913,8 +976,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart == &huart2) {
+#if BLE_POWER_EXPERIMENT
+        BP_TxDone();
+#endif
         if (raw_diag_dma_tx_kind == 1) {
-            raw_diag_tx_done_counter++;
+            raw_diag_tx_done_counter += BLE_BATCH5 ? 5 : 1;
             raw_diag_dma_tx_kind = 0;
             if (raw_diag_status_pending) {
                 BuildStatusFrame();
@@ -923,6 +989,9 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
                     raw_diag_status_pending = 0;
                 }
             }
+#if BLE_RF_EXPERIMENT || BLE_POWER_EXPERIMENT
+            else { RF_TryTransmit(); }
+#endif
         } else {
             raw_diag_dma_tx_kind = 0;
         }
@@ -933,7 +1002,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     if (huart == &huart2) {
         if (raw_diag_dma_tx_kind == 1) {
-            raw_diag_tx_error_counter++;
+            raw_diag_tx_error_counter += BLE_BATCH5 ? 5 : 1;
         }
         raw_diag_dma_tx_kind = 0;
     }
@@ -952,6 +1021,9 @@ void Error_Handler(void)
   __disable_irq();
   while (1)
   {
+#if BLE_RF_EXPERIMENT
+    RF_Poll();
+#endif
   }
   /* USER CODE END Error_Handler_Debug */
 }

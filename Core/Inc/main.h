@@ -121,9 +121,68 @@ void Error_Handler(void);
  * 0 = 上电不发送 BLE 配置指令
  * 1 = 上电复位 BLE 模块后发送固定配置指令
  */
+/* RF-off experiment: hold HJ-131IMH active-high hardware reset.
+ * Does not gate sensor power or the shared wired UART. */
+#ifndef BLE_RF_EXPERIMENT
+#define BLE_RF_EXPERIMENT 0
+#endif
+#ifndef BLE_POWER_EXPERIMENT
+#define BLE_POWER_EXPERIMENT 0
+#endif
+#ifndef BLE_POWER_READ_ONLY
+#define BLE_POWER_READ_ONLY 0
+#endif
+#ifndef BLE_POWER_WRITE_ONLY
+#define BLE_POWER_WRITE_ONLY 0
+#endif
+#ifndef BLE_SINGLE25
+#define BLE_SINGLE25 0
+#endif
+#if BLE_SINGLE25 && (BLE_BATCH5 || BLE_FIXED_MINUS10 || BLE_POWER_EXPERIMENT || BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG)
+#error "Single +2.5 mode excludes other BLE modes"
+#endif
+#ifndef BLE_BATCH5
+#define BLE_BATCH5 0
+#endif
+#if BLE_BATCH5 && (BLE_FIXED_MINUS10 || BLE_POWER_EXPERIMENT || BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG || !ENABLE_RAW_DATA_PACKET)
+#error "Batch mode requires Raw and excludes other BLE modes"
+#endif
+#ifndef BLE_FIXED_MINUS10
+#define BLE_FIXED_MINUS10 0
+#endif
+#if BLE_FIXED_MINUS10 && (BLE_POWER_EXPERIMENT || BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG)
+#error "Fixed -10 mode must preserve other BLE settings and exclude experiments"
+#endif
+#if BLE_POWER_WRITE_ONLY && (!BLE_POWER_EXPERIMENT || BLE_POWER_READ_ONLY)
+#error "Write-only mode requires power experiment and excludes read-only mode"
+#endif
+#if BLE_POWER_READ_ONLY && !BLE_POWER_EXPERIMENT
+#error "BLE_POWER_READ_ONLY requires BLE_POWER_EXPERIMENT"
+#endif
+#if BLE_RF_EXPERIMENT && !ENABLE_RAW_DATA_PACKET
+#error "RF experiment requires Raw output"
+#endif
+#ifndef BLE_RF_DISABLED
+#define BLE_RF_DISABLED 0
+#endif
+#if (BLE_RF_DISABLED != 0) && (BLE_RF_DISABLED != 1)
+#error "BLE_RF_DISABLED must be 0 or 1"
+#endif
+
 #ifndef ENABLE_BLE_CONFIG
 #define ENABLE_BLE_CONFIG       0
 #endif
+
+#if BLE_RF_EXPERIMENT && (BLE_RF_DISABLED || ENABLE_BLE_CONFIG)
+#error "RF experiment must preserve module config and start released"
+#endif
+#if BLE_POWER_EXPERIMENT && (BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG || !ENABLE_RAW_DATA_PACKET)
+#error "Power experiment requires Raw, released BLE and preserved module settings"
+#endif
+#if BLE_POWER_EXPERIMENT && PPG_SAMPLE_RATE != 100 && defined(PPG_SAMPLE_RATE)
+#error "Power experiment requires 100 Hz Raw output"
+#endif
+void BP_RxIRQ(void);
 
 /* PPG 通道选择: 0=禁用PPG（两路IIC关闭，PPG字段填0）, 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
 #ifndef PPG_DEFAULT_CHANNEL

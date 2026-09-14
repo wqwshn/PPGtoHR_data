@@ -268,10 +268,8 @@ QPushButton#btn_panel_switch:hover {{
 
 
 def ui_font(size: int = 10) -> QFont:
-    families = QFontDatabase().families()
-    family = next((name for name in ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI")
-                   if name in families), "sans-serif")
-    font = QFont(family, size)
+    font = QFont("Arial", size)
+    font.setFamilies(["Arial", "SimSun"])
     font.setStyleHint(QFont.SansSerif)
     return font
 
@@ -350,7 +348,7 @@ class MonitorWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setSpacing(8)
-        root.setContentsMargins(12, 8, 12, 8)
+        root.setContentsMargins(8, 4, 8, 4)
         root.addWidget(self._build_toolbar())
         root.addWidget(self._raw_panel, 1)
 
@@ -385,21 +383,25 @@ class MonitorWindow(QMainWindow):
             QComboBox {{ font-size: 10pt; padding: 0 12px; background: {COLOR_BG}; }}
         """)
         layout = QHBoxLayout(frame)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(10)
         t = TRANSLATIONS[self._lang]
-        self._page_title = QLabel(t["panel_raw"])
-        self._page_title.setStyleSheet("font-size: 12pt; font-weight: 600; padding-right: 10px;")
+        self._page_title = QPushButton(t["panel_raw"])
+        self._page_title.setCheckable(True)
+        self._page_title.setFixedHeight(30)
+        self._page_title.setToolTip("点击切换热膜显示：默认3点中值；按下为纯原始。两种数据始终保存。")
+        self._page_title.toggled.connect(lambda raw: self._set_raw_display(raw))
+        self._page_title.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 10pt; padding: 0 8px; color: #AAB9CA; } QPushButton:hover { background: #243447; } QPushButton:checked { color: #42C7DC; border-bottom: 2px solid #42C7DC; }")
         layout.addWidget(self._page_title)
         self._combo_port = QComboBox()
         self._combo_port.setMinimumWidth(160)
-        self._combo_port.setFixedHeight(38)
+        self._combo_port.setFixedHeight(30)
         layout.addWidget(self._combo_port)
 
         def button(text, secondary=False):
             btn = QPushButton(text)
             btn.setProperty("secondary", secondary)
-            btn.setFixedHeight(38)
+            btn.setFixedHeight(30)
             layout.addWidget(btn)
             return btn
 
@@ -428,6 +430,11 @@ class MonitorWindow(QMainWindow):
         self._btn_lang = button(t["lang"], True)
         self._btn_lang.clicked.connect(self._toggle_language)
         return frame
+
+    def _set_raw_display(self, raw):
+        if self._raw_panel._smooth_display == raw:
+            self._raw_panel._toggle_smoothing()
+        self._page_title.setToolTip("当前：纯原始热膜显示" if raw else "当前：3点中值热膜显示；点击切换原始")
 
     def _update_record_button(self):
         recording = self._raw_panel.is_recording
@@ -615,7 +622,7 @@ class HRPanel(QWidget):
         card = QFrame()
         card.setObjectName("card")
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setContentsMargins(10, 6, 10, 6)
 
         t = TRANSLATIONS[self._lang]
         self._paths_card_title = QLabel(t["algorithm_paths"])

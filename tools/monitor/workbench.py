@@ -8,14 +8,14 @@ from firmware_build import ROOT
 
 
 class Workbench(QMainWindow):
-    def __init__(self, simulate=False, firmware=False):
+    def __init__(self, simulate=False, firmware=False, capture_link=None):
         super().__init__()
         from main import AppController
         self.setWindowTitle("PPG 工作台 · 采集与烧录")
         self.setFont(ui_font())
         self.setStyleSheet(DARK_QSS + """
             QTabWidget::pane { border: none; }
-            QTabBar::tab { background: #1A2332; color: #9BAFC3; padding: 12px 28px; margin: 4px; }
+            QTabBar::tab { background: #1A2332; color: #9BAFC3; padding: 7px 22px; margin: 2px; }
             QTabBar::tab:selected { background: #0891B2; color: white; }
             QGroupBox { border: 1px solid #2A3A4E; border-radius: 8px; margin-top: 12px; padding: 18px; }
             QGroupBox::title { subcontrol-origin: margin; left: 14px; }
@@ -27,7 +27,12 @@ class Workbench(QMainWindow):
         self.monitor.setWindowFlags(Qt.Widget)
         self.monitor.setMinimumSize(1000, 650)
         self.monitor._save_dir = ROOT / "recordings"
-        self.monitor._save_dir.mkdir(exist_ok=True)
+        if capture_link is not None:
+            self.monitor._save_dir /= capture_link
+            label = {'wired': '有线参考', 'wireless': '无线链路'}[capture_link]
+            self.setWindowTitle(f"PPG 数据采集 · {label}")
+            self.monitor._btn_save_path.setText('有线目录' if capture_link == 'wired' else '无线目录')
+        self.monitor._save_dir.mkdir(parents=True, exist_ok=True)
         self.monitor._btn_save_path.setToolTip(str(self.monitor._save_dir))
         self.controller = AppController(self.monitor)
         self.monitor.refresh_ports()
@@ -36,7 +41,7 @@ class Workbench(QMainWindow):
         self.tabs.addTab(self.firmware, "固件配置与烧录")
         self.firmware.busy_changed.connect(lambda busy: self.monitor.setEnabled(not busy))
         self.demo_button = QPushButton("开始模拟")
-        self.demo_button.setMinimumHeight(36)
+        self.demo_button.setMinimumHeight(28)
         self.demo_button.clicked.connect(self._toggle_simulation)
         self.monitor._btn_disconnect.clicked.connect(lambda: self.demo_button.setText("开始模拟"))
         self.tabs.setCornerWidget(self.demo_button)

@@ -35,12 +35,14 @@ class AppController:
             self._win.show_error("No valid port selected")
             return
 
+        self._win._raw_panel._rf_last = None
         self._reader = SerialReader(port, baudrate=115200)
         # 双协议信号连接
         self._reader.raw_packet_received.connect(self._win._raw_panel.handle_raw_data)
         self._reader.raw_parse_stats_received.connect(
             self._win._raw_panel.handle_raw_parse_stats
         )
+        self._reader.rf_event_received.connect(self._win._raw_panel.handle_rf_event)
         self._reader.status_packet_received.connect(self._win._raw_panel.handle_status_data)
         self._reader.calib_status_received.connect(self._win._raw_panel.handle_calib_status)
         self._reader.error_occurred.connect(self._on_error)
@@ -73,6 +75,8 @@ def main():
         help="Run with raw sensor simulated data (100Hz)",
     )
     parser.add_argument("--firmware", action="store_true", help="Open firmware configuration page")
+    parser.add_argument("--capture-link", choices=("wired", "wireless"),
+                        help="Label a capture window and use a separate recording directory")
     args = parser.parse_args()
 
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling)
@@ -82,7 +86,8 @@ def main():
     app.setStyle("Fusion")
 
     from workbench import Workbench
-    win = Workbench(simulate=args.simulate or args.raw_simulate, firmware=args.firmware)
+    win = Workbench(simulate=args.simulate or args.raw_simulate, firmware=args.firmware,
+                    capture_link=args.capture_link)
     win.show()
 
     sys.exit(app.exec_())

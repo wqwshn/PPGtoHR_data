@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from datetime import datetime
 
 from PyQt5.QtCore import QProcess, QProcessEnvironment, pyqtSignal
@@ -31,27 +32,29 @@ class FirmwarePanel(QWidget):
         root.setContentsMargins(24, 20, 24, 16)
         root.setSpacing(14)
         title = QLabel("固件配置与烧录")
-        title.setStyleSheet("font-size: 18pt; font-weight: 600;")
+        title.setStyleSheet("font-size: 16pt; font-weight: 600;")
         root.addWidget(title)
         intro = QLabel("选择板子参数，然后编译或通过 ST-Link 烧录。目标芯片：STM32L452CEU6。")
         intro.setWordWrap(True)
         root.addWidget(intro)
         self.form_box = QGroupBox("采集参数")
         form = QFormLayout(self.form_box)
+        self._form = form
         form.setSpacing(14)
         self.channel = self._combo([("不使用 PPG · 两路 IIC 关闭 / PPG 填 0", 0), ("PPG 1 · IIC1", 1), ("PPG 2 · IIC2", 2)])
         self.ble = self._combo([("关闭 · 保留模块现有配置", 0), ("开启 · 每次上电初始化蓝牙", 1)])
+        self.rf = self._combo([("标准采集 · 单帧100 Hz / +2.5 dBm", 8), ("自定义初始化 · 保留/重设模块配置", 0)])
         self.mode = self._combo([("绿光采集（心率光模式）", 0), ("红光 + 红外（血氧光模式）", 1)])
         self.speed = self._combo([(f"{x} kHz", x) for x in (100, 400, 1000, 1800)])
         form.addRow("PPG / IIC 通道", self.channel)
+        form.addRow("蓝牙配置", self.rf)
         form.addRow("蓝牙初始化", self.ble)
         form.addRow("采集光模式", self.mode)
         form.addRow("ST-Link SWD 速度", self.speed)
         form.addRow("输出与采样率", QLabel("原始数据 · 100 Hz（与采集页时间轴一致）"))
         root.addWidget(self.form_box)
-        note = QLabel("蓝牙初始化开启后，每次上电都会发送固件中预设的模块配置指令。\n"
-                      "SWD 接线：SWDIO → PA13，SWCLK → PA14，GND 共地，建议接 NRST。\n"
-                      "按板子要求供电，ST-Link 的 VTref 是目标电压参考；串口采集仍需 UART / 蓝牙连接。")
+        note = QLabel("标准采集：启动复位蓝牙并写入 +2.5 dBm，保持单帧100 Hz。\n"
+                      "ST-Link：SWDIO → PA13，SWCLK → PA14，GND 共地，建议连接 NRST；按板卡要求供电。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #9BAFC3; font-size: 9pt;")
         root.addWidget(note)
@@ -59,6 +62,10 @@ class FirmwarePanel(QWidget):
         self.summary.setWordWrap(True)
         self.summary.setStyleSheet("color: #42C7DC; padding: 10px; background: #1A2332;")
         root.addWidget(self.summary)
+        self.dual_button = QPushButton("打开双路采集窗口 · 有线参考 / 无线链路")
+        self.dual_button.setMinimumHeight(36)
+        self.dual_button.clicked.connect(self._open_dual_capture)
+        root.addWidget(self.dual_button)
         row = QHBoxLayout()
         self.save_button = QPushButton("保存选择")
         self.probe_button = QPushButton("检查 ST-Link 连接")
@@ -84,8 +91,8 @@ class FirmwarePanel(QWidget):
             settings = FirmwareSettings()
             self.status.setText(f"配置文件无效，已显示默认值（原文件未覆盖）：{exc}")
         for combo, value in ((self.channel, settings.channel), (self.ble, settings.ble_init),
-                             (self.mode, settings.work_mode), (self.speed, settings.swd_speed)):
-            combo.setCurrentIndex(combo.findData(value))
+                             (self.mode, settings.work_mode), (self.speed, settings.swd_speed), (self.rf, settings.ble_rf_disabled)):
+            combo.setCurrentIndex(max(0, combo.findData(value)))
             combo.currentIndexChanged.connect(self._update_summary)
         self._update_summary()
         self.save_button.clicked.connect(self._save)
@@ -106,12 +113,28 @@ class FirmwarePanel(QWidget):
         combo.setMinimumHeight(36)
         return combo
 
+    def _open_dual_capture(self):
+        for link in ('wired', 'wireless'):
+            ok = QProcess.startDetached(sys.executable,
+                 [str(ROOT / 'tools/monitor/main.py'), '--capture-link', link], str(ROOT))
+            if isinstance(ok, tuple):
+                ok = ok[0]
+            if not ok:
+                self.status.setText(f"无法打开 {link} 窗口，请查看 Python 环境。")
+                return
+        self.status.setText("双路窗口已打开 · 各自选择不同 COM 口并录制；保存到 recordings/wired 与 wireless")
+
     def settings(self):
         return FirmwareSettings(self.channel.currentData(), self.ble.currentData(),
-                                self.mode.currentData(), self.speed.currentData())
+                                self.mode.currentData(), self.speed.currentData(), self.rf.currentData())
 
     def _update_summary(self):
         self.mode.setEnabled(self.channel.currentData() != 0)
+        self.ble.setEnabled(self.rf.currentData() == 0)
+        self.ble.setVisible(self.rf.currentData() == 0)
+        self._form.labelForField(self.ble).setVisible(self.rf.currentData() == 0)
+        if self.rf.currentData() != 0 and self.ble.currentData() != 0:
+            self.ble.setCurrentIndex(self.ble.findData(0))
         self.summary.setText(self.settings().summary())
 
     def _save(self):
@@ -177,6 +200,7 @@ class FirmwarePanel(QWidget):
     def _set_busy(self, value):
         self.busy = value
         self.form_box.setEnabled(not value)
+        self.dual_button.setEnabled(not value)
         for button in (self.save_button, self.probe_button, self.build_button, self.flash_button):
             button.setEnabled(not value)
         self.busy_changed.emit(value)

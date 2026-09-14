@@ -404,8 +404,12 @@ void TIM3_IRQHandler(void)
 void USART2_IRQHandler(void)
 {
   /* USER CODE BEGIN USART2_IRQn 0 */
+#if BLE_POWER_EXPERIMENT
+  BP_RxIRQ();
+#endif
   // 如果检测到串口空闲中断
-  if(__HAL_UART_GET_FLAG(&huart2, UART_FLAG_IDLE) != RESET)
+  if(__HAL_UART_GET_IT_SOURCE(&huart2, UART_IT_IDLE) != RESET &&
+     __HAL_UART_GET_FLAG(&huart2, UART_FLAG_IDLE) != RESET)
   {
       __HAL_UART_CLEAR_IDLEFLAG(&huart2); // 清除IDLE标志位
 
