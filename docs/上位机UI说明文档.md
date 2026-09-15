@@ -5,6 +5,7 @@
 根目录 `start.bat` 或旧 `tools/monitor/start_monitor.bat` 均进入 `Workbench`。
 “原始数据采集”嵌入原始数据窗口；“固件配置与烧录”提供 IIC 通道、蓝牙初始化、采集光模式和 SWD 速度选择。
 烧录页使用 QProcess 顺序执行 CMake 配置、构建和 OpenOCD；失败停止后续操作，进程日志落到 `.local/logs`。
+ST-Link 检查使用同一份 `tools/firmware/openocd-stlink.cfg`；配置已兼容本机 OpenOCD 0.12 HLA 驱动的 `hla_swd` 传输名，连接报错排查见[工作台说明](统一工作台使用说明.md#st-link-传输配置兼容性)。
 当前输出固定 Raw 100Hz，与采集时间轴一致。保存选择到 `config/firmware.json`，通过 CMake 宏生效，不改写源码。
 采集默认保存至项目 `recordings/`，模拟入口在工作台右上角。硬件连接检查和烧录前需要停止录制，并断开采集；窗口关闭统一释放串口和 CSV。
 详见 [统一工作台使用说明](统一工作台使用说明.md)。

@@ -1,6 +1,8 @@
 import json
 import os
 import sys
+import shutil
+import subprocess
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -9,8 +11,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "monitor"
 import pytest
 from PyQt5.QtCore import QProcess
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from firmware_build import FirmwareSettings, flash_args
+from firmware_build import FirmwareSettings, flash_args, OPENOCD_CONFIG, tool_environment
 from firmware_panel import FirmwarePanel
+
+
+def test_stlink_config_loads_with_installed_openocd_without_hardware():
+    env = tool_environment()
+    openocd = shutil.which("openocd", path=env["PATH"])
+    if not openocd:
+        pytest.skip("OpenOCD is required to validate its transport configuration")
+    result = subprocess.run(
+        [openocd, "-f", str(OPENOCD_CONFIG), "-c", "shutdown"],
+        env=env, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_settings_roundtrip_and_explicit_compiler_definitions(tmp_path):
