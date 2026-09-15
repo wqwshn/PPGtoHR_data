@@ -117,7 +117,7 @@ void Error_Handler(void);
  * 0 = 上电不发送 BLE 配置指令
  * 1 = 上电复位 BLE 模块后发送固定配置指令
  */
-#define ENABLE_BLE_CONFIG       1
+#define ENABLE_BLE_CONFIG       0
 
 /* 自定义 BLE MAC 地址 (12 字节 HEX, 大端)
  * HJ-380 将只连接此 MAC 地址的 HJ-131 设备

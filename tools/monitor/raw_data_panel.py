@@ -36,6 +36,11 @@ PLOT_BUFFER = 2000
 # 可见窗口大小 (实际绘制点数)
 VISIBLE_POINTS = 800
 RAW_RECORD_SAMPLE_RATE_HZ = 100.0
+
+# MAX30101 ADU → nA 转换系数
+# 18-bit/16384nA: 16384/262143 ≈ 0.0625 nA/ADU
+# 17-bit/8192nA:   8192/131071 ≈ 0.0625 nA/ADU
+PPG_ADU_TO_NA = 1.0 / 16.0
 TIMELINE_CSV_HEADER = [
     "Time(s)", "SampleIndex", "Seq", "ValidFlag", "InterpFlag", "GapLen", "MissingBefore",
     "Uc1(mV)", "Uc2(mV)", "Ut1(mV)", "Ut2(mV)",
@@ -303,9 +308,9 @@ class RawDataPanel(QWidget):
 
         # 左侧: 绿光
         self._plot_ppg_g, self._curve_ppg_g = self._make_plot(
-            "PPG Green", COLOR_GREEN
+            "PPG Green (nA)", COLOR_GREEN
         )
-        self._plot_ppg_g._base_title = "PPG Green"
+        self._plot_ppg_g._base_title = "PPG Green (nA)"
         ppg_layout.addWidget(self._plot_ppg_g, 1)
 
         # 右侧: 红光 + 红外 上下排列
@@ -313,10 +318,10 @@ class RawDataPanel(QWidget):
         right_layout = QVBoxLayout(right)
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(6)
-        self._plot_ppg_r, self._curve_ppg_r = self._make_plot("PPG Red", COLOR_RED)
-        self._plot_ppg_r._base_title = "PPG Red"
-        self._plot_ppg_ir, self._curve_ppg_ir = self._make_plot("PPG IR", "#3B82F6")
-        self._plot_ppg_ir._base_title = "PPG IR"
+        self._plot_ppg_r, self._curve_ppg_r = self._make_plot("PPG Red (nA)", COLOR_RED)
+        self._plot_ppg_r._base_title = "PPG Red (nA)"
+        self._plot_ppg_ir, self._curve_ppg_ir = self._make_plot("PPG IR (nA)", "#3B82F6")
+        self._plot_ppg_ir._base_title = "PPG IR (nA)"
         right_layout.addWidget(self._plot_ppg_r)
         right_layout.addWidget(self._plot_ppg_ir)
         ppg_layout.addWidget(right, 1)
@@ -538,10 +543,10 @@ class RawDataPanel(QWidget):
         if len(self._data_Uc1) == 0:
             return
 
-        # PPG 三通道波形 (裁剪至可见窗口)
-        self._curve_ppg_g.setData(list(self._data_ppg_g)[-VISIBLE_POINTS:])
-        self._curve_ppg_r.setData(list(self._data_ppg_r)[-VISIBLE_POINTS:])
-        self._curve_ppg_ir.setData(list(self._data_ppg_ir)[-VISIBLE_POINTS:])
+        # PPG 三通道波形 (ADU→nA 转换后显示, 裁剪至可见窗口)
+        self._curve_ppg_g.setData([v * PPG_ADU_TO_NA for v in list(self._data_ppg_g)[-VISIBLE_POINTS:]])
+        self._curve_ppg_r.setData([v * PPG_ADU_TO_NA for v in list(self._data_ppg_r)[-VISIBLE_POINTS:]])
+        self._curve_ppg_ir.setData([v * PPG_ADU_TO_NA for v in list(self._data_ppg_ir)[-VISIBLE_POINTS:]])
 
         # 桥压波形
         self._curve_Ut1.setData(list(self._data_Ut1)[-VISIBLE_POINTS:])
@@ -587,10 +592,18 @@ class RawDataPanel(QWidget):
             (self._plot_Uc2, self._data_Uc2),
         ):
             avg = self._last_n_avg(deq)
-            title = (
-                f"{plot._base_title}"
-                f"<span style='color:{dim};font-size:9pt'>  avg:{avg:.1f}</span>"
-            )
+            # PPG 通道显示 nA, 其他通道保持不变
+            if plot in (self._plot_ppg_g, self._plot_ppg_r, self._plot_ppg_ir):
+                avg_na = avg * PPG_ADU_TO_NA
+                title = (
+                    f"{plot._base_title}"
+                    f"<span style='color:{dim};font-size:9pt'>  avg:{avg_na:.1f} nA</span>"
+                )
+            else:
+                title = (
+                    f"{plot._base_title}"
+                    f"<span style='color:{dim};font-size:9pt'>  avg:{avg:.1f}</span>"
+                )
             plot.setTitle(title, color=dim, size="10pt")
 
         # ACC 三轴: 标题格式 "ACC (g)  X:值 Y:值 Z:值"
@@ -811,9 +824,9 @@ class RawDataPanel(QWidget):
             self._lbl_diag.setText(f"{t.get('diag', 'Diag')}: --")
 
         # 更新图表标题
-        self._plot_ppg_g._base_title = t.get("ppg_green", "PPG Green")
-        self._plot_ppg_r._base_title = t.get("ppg_red", "PPG Red")
-        self._plot_ppg_ir._base_title = t.get("ppg_ir", "PPG IR")
+        self._plot_ppg_g._base_title = t.get("ppg_green", "PPG Green (nA)")
+        self._plot_ppg_r._base_title = t.get("ppg_red", "PPG Red (nA)")
+        self._plot_ppg_ir._base_title = t.get("ppg_ir", "PPG IR (nA)")
         self._plot_Ut1._base_title = t.get("bridge_top", "Ut1 (mV)")
         self._plot_Ut2._base_title = t.get("bridge_top", "Ut2 (mV)")
         self._plot_Uc1._base_title = t.get("bridge_mid", "Uc1 (mV)")
