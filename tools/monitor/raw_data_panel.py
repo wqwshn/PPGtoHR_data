@@ -428,7 +428,7 @@ class RawDataPanel(QWidget):
     def _build_info_bar(self) -> QFrame:
         frame = QFrame()
         frame.setObjectName("card")
-        frame.setStyleSheet("QLabel { background: transparent; font-size: 9pt; font-weight: 400; }")
+        frame.setStyleSheet("QLabel { background: transparent; font-size: 11pt; font-weight: 400; }")
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(2)
@@ -448,7 +448,7 @@ class RawDataPanel(QWidget):
         for name, text, color, row in fields:
             elide = name in ("_lbl_diag", "_lbl_calib")
             label = _ElidedInfoLabel(text) if elide else QLabel(text)
-            label.setFont(ui_font(9))
+            label.setFont(ui_font(11))
             label.setStyleSheet(f"color: {color}; background: transparent;")
             label.setWordWrap(False)
             setattr(self, name, label)
@@ -720,7 +720,7 @@ class RawDataPanel(QWidget):
                 f"{snr_text} | {estimate.window_seconds:.0f}s | {calc_text}"
             )
             self._lbl_realtime_hr.setStyleSheet(
-                f"color: {COLOR_GREEN}; font-size: 9pt; font-weight: 500; background: transparent;"
+                f"color: {COLOR_GREEN}; font-size: 11pt; font-weight: 500; background: transparent;"
             )
             return
 
@@ -735,7 +735,7 @@ class RawDataPanel(QWidget):
             f"{snr_text} | {calc_text}"
         )
         self._lbl_realtime_hr.setStyleSheet(
-            f"color: {color}; font-size: 9pt; font-weight: 500; background: transparent;"
+            f"color: {color}; font-size: 11pt; font-weight: 500; background: transparent;"
         )
 
     def _toggle_record(self, raw_path: Path) -> bool:
@@ -876,7 +876,7 @@ class RawDataPanel(QWidget):
         self._lbl_loss.setText(f"{t.get('packet_loss', 'Loss')}: 0.00% (0/0)")
         self._lbl_realtime_hr.setText(f"{t.get('realtime_hr', 'Realtime HR')}: --")
         self._lbl_realtime_hr.setStyleSheet(
-            f"color: {COLOR_TEXT_DIM}; font-size: 9pt; font-weight: 500; background: transparent;"
+            f"color: {COLOR_TEXT_DIM}; font-size: 11pt; font-weight: 500; background: transparent;"
         )
         self._lbl_count.setText(f"{t.get('pkt_count', 'Packets')}: 0")
         self._lbl_diag.setText(f"{t.get('diag', 'Diag')}: --")

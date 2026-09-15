@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QPushButton, QProgressBar, QStatusBar,
     QFrame, QFileDialog, QStackedWidget, QButtonGroup,
     QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QLineEdit,
-    QMessageBox, QSpinBox,
+    QMessageBox, QSpinBox, QSizePolicy,
 )
 import pyqtgraph as pg
 
@@ -548,7 +548,7 @@ class MonitorWindow(QMainWindow):
         frame.setStyleSheet(f"""
             QFrame#toolbar {{ background: {COLOR_CARD}; border: 1px solid {COLOR_CARD_BORDER}; border-radius: 10px; }}
             QFrame#toolbar QLabel {{ background: transparent; }}
-            QPushButton {{ font-size: 10pt; font-weight: 500; padding: 0 14px; border-radius: 6px; }}
+            QPushButton {{ font-size: 10pt; font-weight: 500; padding: 0 8px; border-radius: 6px; }}
             QPushButton[secondary="true"] {{ background: #243447; color: {COLOR_TEXT}; border: 1px solid #35485E; }}
             QPushButton[secondary="true"]:hover {{ background: #30465D; }}
             QPushButton:disabled {{ background: #202D3D; color: #6F8297; border: none; }}
@@ -557,12 +557,9 @@ class MonitorWindow(QMainWindow):
             QPushButton#btn_record[recording="true"] {{ background: #AD2938; border: 1px solid #FF8790; }}
             QComboBox {{ font-size: 10pt; padding: 0 12px; background: {COLOR_BG}; }}
         """)
-        toolbar_layout = QVBoxLayout(frame)
-        toolbar_layout.setContentsMargins(10, 6, 10, 6)
-        layout = QHBoxLayout()
-        toolbar_layout.addLayout(layout)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(6)
         t = TRANSLATIONS[self._lang]
         self._page_title = QPushButton(t["panel_raw"])
         self._page_title.setCheckable(True)
@@ -572,7 +569,7 @@ class MonitorWindow(QMainWindow):
         self._page_title.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 10pt; padding: 0 8px; color: #AAB9CA; } QPushButton:hover { background: #243447; } QPushButton:checked { color: #42C7DC; border-bottom: 2px solid #42C7DC; }")
         layout.addWidget(self._page_title)
         self._combo_port = QComboBox()
-        self._combo_port.setMinimumWidth(160)
+        self._combo_port.setFixedWidth(100)
         self._combo_port.setFixedHeight(30)
         layout.addWidget(self._combo_port)
 
@@ -588,16 +585,6 @@ class MonitorWindow(QMainWindow):
         self._btn_disconnect.setEnabled(False)
         self._btn_refresh = button(t["refresh"], True)
         self._btn_refresh.clicked.connect(self.refresh_ports)
-        layout.addStretch()
-        self._status_dot = StatusDot()
-        layout.addWidget(self._status_dot)
-        self._conn_label = QLabel(t["disconnected"])
-        layout.addWidget(self._conn_label)
-        self._btn_lang = button(t["lang"], True)
-        self._btn_lang.clicked.connect(self._toggle_language)
-        layout = QHBoxLayout()
-        layout.setSpacing(10)
-        toolbar_layout.addLayout(layout)
         self._btn_clear = button(t["clear"], True)
         self._btn_clear.clicked.connect(self._clear_active_panel)
         self._btn_save_path = button(t["select_save_path"], True)
@@ -610,7 +597,13 @@ class MonitorWindow(QMainWindow):
         self._btn_record = button(t["record"])
         self._btn_record.setObjectName("btn_record")
         self._btn_record.clicked.connect(self._toggle_record_active)
-        layout.addStretch()
+        self._status_dot = StatusDot()
+        layout.addWidget(self._status_dot)
+        self._conn_label = QLabel(t["disconnected"])
+        self._conn_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        layout.addWidget(self._conn_label, 1)
+        self._btn_lang = button(t["lang"], True)
+        self._btn_lang.clicked.connect(self._toggle_language)
         return frame
 
     def _set_raw_display(self, raw):
@@ -641,7 +634,7 @@ class MonitorWindow(QMainWindow):
             self._update_save_dir_button()
 
     def _update_save_dir_button(self):
-        self._btn_save_path.setText(self._save_dir.name)
+        self._btn_save_path.setText(TRANSLATIONS[self._lang]["select_save_path"])
         self._btn_save_path.setToolTip(str(self._save_dir))
 
     def _open_recording_info(self):
@@ -694,6 +687,7 @@ class MonitorWindow(QMainWindow):
 
     def show_error(self, msg: str):
         self._conn_label.setText(msg)
+        self._conn_label.setToolTip(msg)
         self._conn_label.setStyleSheet(f"color: {COLOR_RED}; font-size: 12px;")
 
     def on_mac_configured(self, mac: str, success: bool):
@@ -709,6 +703,7 @@ class MonitorWindow(QMainWindow):
             self._conn_label.setStyleSheet(
                 f"color: {COLOR_RED}; font-size: 12px; font-weight: bold;"
             )
+        self._conn_label.setToolTip(self._conn_label.text())
 
     def update_status(self, text: str):
         self._status_label.setText(text)
