@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DOC = ROOT / "docs" / "原始数据录制文件结构说明.md"
+DOC = ROOT / "docs" / "acquisition" / "原始数据录制文件结构说明.md"
 
 
 def test_raw_data_file_structure_doc_describes_metadata_based_recording_outputs():

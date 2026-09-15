@@ -5,7 +5,7 @@ PPG Monitor - 串口读取线程
 支持双协议:
   - 31 字节心率结果包 (0xAA 0xCC) -> hr_packet_received
   - 35 字节多光谱原始传感器包 (0xAA 0xBB) -> raw_packet_received
-  - 53 字节 Raw 链路诊断状态包 (0xAA 0xDD) -> status_packet_received
+  - 69 字节 Raw 链路诊断状态包 (0xAA 0xDD) -> status_packet_received
 
 HJ-380 BLE 适配:
   - 连接握手: 自动发送 ST_CON_MAC 绑定指令
@@ -34,6 +34,9 @@ from protocol import (
     HJ380_HANDSHAKE_TIMEOUT_S,
 )
 
+from rf_events import RFEvent, RF_PACKET_LEN, RF_HEADER, parse_rf_event
+from rf_events import POWER_DIAG_HEADER, POWER_DIAG_LEN, parse_power_diagnostic
+
 SERIAL_READ_TIMEOUT_S = 0.01
 SERIAL_READ_CHUNK_BYTES = max(PACKET_LEN, RAW_PACKET_LEN, STATUS_PACKET_LEN) * 4
 
@@ -54,6 +57,7 @@ class SerialReader(QThread):
     raw_packet_received = pyqtSignal(RawDataPacket)
     # 信号: Raw 链路诊断状态包 (1Hz)
     status_packet_received = pyqtSignal(StatusPacket)
+    rf_event_received = pyqtSignal(RFEvent)
     # 信号: PC 端 Raw 候选帧解析统计 (总候选帧, 无效候选帧)
     raw_parse_stats_received = pyqtSignal(int, int)
     # 信号: 陀螺仪标定状态文本
@@ -65,10 +69,11 @@ class SerialReader(QThread):
     # 信号: HJ-380 MAC 配置结果 (mac, success)
     mac_configured = pyqtSignal(str, bool)
 
-    def __init__(self, port: str, baudrate: int = 115200, parent=None):
+    def __init__(self, port: str, baudrate: int = 115200, parent=None, *, bind_mac: bool = True):
         super().__init__(parent)
         self._port = port
         self._baudrate = baudrate
+        self._bind_mac = bind_mac
         self._running = False
         self._serial: Optional[serial.Serial] = None
         # 原始包统计 (用于丢包率计算)
@@ -222,10 +227,14 @@ class SerialReader(QThread):
         time.sleep(0.3)
 
         # HJ-380 连接握手: 先断开已有连接, 再绑定目标 MAC
-        if not self._do_hj380_handshake():
-            self.error_occurred.emit("HJ-380: 配置指令发送失败")
-        self._handshake_deadline = time.time() + HJ380_HANDSHAKE_TIMEOUT_S
-        self._mac_configured = False
+        if self._bind_mac:
+            if not self._do_hj380_handshake():
+                self.error_occurred.emit("HJ-380: 配置指令发送失败")
+            self._handshake_deadline = time.time() + HJ380_HANDSHAKE_TIMEOUT_S
+        else:
+            # 有线参考窗口只读取数据，不向共享 UART 发送蓝牙绑定命令。
+            self._handshake_deadline = 0.0
+        self._mac_configured = not self._bind_mac
 
         # 帧状态机: 0=等待帧头0(0xAA), 1=等待帧头1区分协议, 2=收集 payload
         state = 0
@@ -310,6 +319,14 @@ class SerialReader(QThread):
                             buf.append(byte)
                             expected_len = STATUS_PACKET_LEN  # 69
                             state = 2
+                        elif byte == RF_HEADER:
+                            buf.append(byte)
+                            expected_len = RF_PACKET_LEN
+                            state = 2
+                        elif byte == POWER_DIAG_HEADER:
+                            buf.append(byte)
+                            expected_len = POWER_DIAG_LEN
+                            state = 2
                         elif byte == HEADER_BYTE_0:
                             # 连续 0xAA, 重新开始
                             buf = bytearray([byte])
@@ -319,7 +336,15 @@ class SerialReader(QThread):
                         buf.append(byte)
                         if len(buf) == expected_len:
                             # 收集满一帧, 按类型解析
-                            if expected_len == PACKET_LEN:
+                            if buf[1] == POWER_DIAG_HEADER:
+                                event = parse_power_diagnostic(bytes(buf))
+                                if event is not None:
+                                    self.rf_event_received.emit(event)
+                            elif expected_len == RF_PACKET_LEN:
+                                event = parse_rf_event(bytes(buf))
+                                if event is not None:
+                                    self.rf_event_received.emit(event)
+                            elif expected_len == PACKET_LEN:
                                 pkt = parse_hr_packet(bytes(buf))
                                 if pkt is not None:
                                     self.hr_packet_received.emit(pkt)

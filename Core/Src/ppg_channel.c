@@ -37,7 +37,7 @@ void PPG_Init(void)
         return;
     if (g_ppg_channel == PPG_CH2)
         MAX30101_2_Init();
-    else
+    else if (g_ppg_channel == PPG_CH1)
         MAX30101_Init();
 }
 
@@ -51,8 +51,9 @@ uint8_t PPG_Check(void)
         return 0;
     if (g_ppg_channel == PPG_CH2)
         return MAX2_Check();
-    else
+    else if (g_ppg_channel == PPG_CH1)
         return MAX_Check();
+    return 0;
 }
 
 /**
@@ -67,8 +68,9 @@ uint8_t PPG_ReadOneByte(uint16_t addr)
         return 0;
     if (g_ppg_channel == PPG_CH2)
         return MAX2_ReadOneByte(addr);
-    else
+    else if (g_ppg_channel == PPG_CH1)
         return MAX_ReadOneByte(addr);
+    return 0;
 }
 
 /**
@@ -84,7 +86,7 @@ void PPG_WriteOneByte(uint16_t addr, uint8_t data)
         return;
     if (g_ppg_channel == PPG_CH2)
         MAX2_WriteOneByte(addr, data);
-    else
+    else if (g_ppg_channel == PPG_CH1)
         MAX_WriteOneByte(addr, data);
 }
 
@@ -102,6 +104,8 @@ void PPG_ReadFIFO_Burst(uint8_t *buf, uint8_t len)
     }
     if (g_ppg_channel == PPG_CH2)
         MAX2_ReadFIFO_Burst(buf, len);
-    else
+    else if (g_ppg_channel == PPG_CH1)
         MAX_ReadFIFO_Burst(buf, len);
+    else
+        for (uint8_t i = 0; i < len; ++i) buf[i] = 0;
 }

@@ -105,19 +105,69 @@ void Error_Handler(void);
 /* 工作模式选择 */
 #define MODE_HEART_RATE 0
 #define MODE_SPO2       1
-#define CURRENT_WORK_MODE    MODE_HEART_RATE          /* 0=心率模式, 1=血氧模式 */
+#ifndef CURRENT_WORK_MODE
+#define CURRENT_WORK_MODE    MODE_HEART_RATE   /* 0=心率模式, 1=血氧模式 */
+#endif
 
 /* 数据发送模式选择 (两种模式互斥, 不会同时发送)
  * 0 = 在线心率模式: 运行算法, 仅发送 1Hz HR 结果包 (0xAA 0xCC) [仅125Hz]
  * 1 = 原始数据模式: 仅发送原始数据包 (0xAA 0xBB), 不运行算法 [所有采样率]
  */
+#ifndef ENABLE_RAW_DATA_PACKET
 #define ENABLE_RAW_DATA_PACKET  1
+#endif
 
 /* HJ-131IMH BLE 配置开关:
  * 0 = 上电不发送 BLE 配置指令
  * 1 = 上电复位 BLE 模块后发送固定配置指令
  */
-#define ENABLE_BLE_CONFIG       0
+/* RF-off experiment: hold HJ-131IMH active-high hardware reset.
+ * Does not gate sensor power or the shared wired UART. */
+#ifndef BLE_RF_EXPERIMENT
+#define BLE_RF_EXPERIMENT 0
+#endif
+#ifndef BLE_POWER_EXPERIMENT
+#define BLE_POWER_EXPERIMENT 0
+#endif
+#ifndef BLE_POWER_READ_ONLY
+#define BLE_POWER_READ_ONLY 0
+#endif
+#ifndef BLE_POWER_WRITE_ONLY
+#define BLE_POWER_WRITE_ONLY 0
+#endif
+#ifndef BLE_SINGLE25
+#define BLE_SINGLE25 0
+#endif
+#if BLE_SINGLE25 && (BLE_BATCH5 || BLE_FIXED_MINUS10 || BLE_POWER_EXPERIMENT || BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG)
+#error "Single +2.5 mode excludes other BLE modes"
+#endif
+#ifndef BLE_BATCH5
+#define BLE_BATCH5 0
+#endif
+#if BLE_BATCH5 && (BLE_FIXED_MINUS10 || BLE_POWER_EXPERIMENT || BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG || !ENABLE_RAW_DATA_PACKET)
+#error "Batch mode requires Raw and excludes other BLE modes"
+#endif
+#ifndef BLE_FIXED_MINUS10
+#define BLE_FIXED_MINUS10 0
+#endif
+#if BLE_FIXED_MINUS10 && (BLE_POWER_EXPERIMENT || BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG)
+#error "Fixed -10 mode must preserve other BLE settings and exclude experiments"
+#endif
+#if BLE_POWER_WRITE_ONLY && (!BLE_POWER_EXPERIMENT || BLE_POWER_READ_ONLY)
+#error "Write-only mode requires power experiment and excludes read-only mode"
+#endif
+#if BLE_POWER_READ_ONLY && !BLE_POWER_EXPERIMENT
+#error "BLE_POWER_READ_ONLY requires BLE_POWER_EXPERIMENT"
+#endif
+#if BLE_RF_EXPERIMENT && !ENABLE_RAW_DATA_PACKET
+#error "RF experiment requires Raw output"
+#endif
+#ifndef BLE_RF_DISABLED
+#define BLE_RF_DISABLED 0
+#endif
+#if (BLE_RF_DISABLED != 0) && (BLE_RF_DISABLED != 1)
+#error "BLE_RF_DISABLED must be 0 or 1"
+#endif
 
 /* 自定义 BLE MAC 地址 (12 字节 HEX, 大端)
  * HJ-380 将只连接此 MAC 地址的 HJ-131 设备
@@ -125,15 +175,34 @@ void Error_Handler(void);
  */
 #define BLE_CUSTOM_MAC  "784128c58150"
 
-/* PPG 通道选择: 0=禁用PPG(占空发送), 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
+#ifndef ENABLE_BLE_CONFIG
+#define ENABLE_BLE_CONFIG       0
+#endif
+
+#if BLE_RF_EXPERIMENT && (BLE_RF_DISABLED || ENABLE_BLE_CONFIG)
+#error "RF experiment must preserve module config and start released"
+#endif
+#if BLE_POWER_EXPERIMENT && (BLE_RF_EXPERIMENT || BLE_RF_DISABLED || ENABLE_BLE_CONFIG || !ENABLE_RAW_DATA_PACKET)
+#error "Power experiment requires Raw, released BLE and preserved module settings"
+#endif
+#if BLE_POWER_EXPERIMENT && PPG_SAMPLE_RATE != 100 && defined(PPG_SAMPLE_RATE)
+#error "Power experiment requires 100 Hz Raw output"
+#endif
+void BP_RxIRQ(void);
+
+/* PPG 通道选择: 0=禁用PPG（两路IIC关闭，PPG字段填0）, 1=PPG1(IIC1总线), 2=PPG2(IIC2总线) */
+#ifndef PPG_DEFAULT_CHANNEL
 #define PPG_DEFAULT_CHANNEL     2
+#endif
 
 /* PPG 采样率 (Hz): 50 / 100 / 125
  * 50Hz:  内部 800sps / 16x 硬件平均 = 50sps
  * 100Hz: 内部 400sps / 2x 硬件平均 = 200sps, MCU 100Hz 读取
  * 125Hz: 内部 1000sps / 4x 硬件平均 = 250sps, MCU 125Hz 读取
  */
+#ifndef PPG_SAMPLE_RATE
 #define PPG_SAMPLE_RATE         100
+#endif
 
 /* ============================================================ */
 

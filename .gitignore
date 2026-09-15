@@ -62,3 +62,17 @@ tools/data_monitor/
 
 # clangd 缓存
 .cache/
+
+# Local tools, settings, and runtime artifacts
+.venv/
+.local-tools/
+.local/
+config/firmware.json
+.pytest_cache/
+pytest-cache-files-*/
+
+# Local experiment data, nested checkouts and analysis runtimes
+.worktrees/
+recordings/
+reports/
+config/worktree-origin.json

@@ -53,7 +53,7 @@
 **Files:**
 - Modify: `docs/上位机UI说明文档.md`
 - Modify: `docs/在线心率算法实施文档.md`
-- Modify: `docs/MAX30101项目配置说明.md`
+- Modify: `docs/hardware/MAX30101项目配置说明.md`
 
 - [x] Document the 35-byte Raw packet layout.
 - [x] Document quality metric definitions.

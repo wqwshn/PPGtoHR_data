@@ -99,6 +99,8 @@ def suggest_next_trial(metadata: RecordingMetadata) -> int:
 
 def ensure_recording_available(paths: RecordingPaths) -> None:
     """Raise FileExistsError if any member of the recording family exists."""
-    for path in (paths.raw_path, paths.status_path, paths.marker_path):
+    for path in (paths.raw_path, paths.status_path, paths.marker_path,
+                 paths.raw_path.with_name(paths.raw_path.stem + "_processing.json"),
+                 paths.raw_path.with_name(paths.raw_path.stem + "_rf_events.csv")):
         if path.exists():
             raise FileExistsError(f"录制文件已存在: {path}")

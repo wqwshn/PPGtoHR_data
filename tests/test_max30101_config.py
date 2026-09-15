@@ -6,7 +6,7 @@ SAMPLE_RATE_CONFIG_H = (
     ROOT / "Core" / "Inc" / "sample_rate_config.h"
 ).read_text(encoding="utf-8")
 PROJECT_CONFIG_DOC = (
-    ROOT / "docs" / "MAX30101项目配置说明.md"
+    ROOT / "docs" / "hardware" / "MAX30101项目配置说明.md"
 ).read_text(encoding="utf-8")
 
 

@@ -3,7 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIMU_C = (ROOT / "Core" / "Src" / "MIMU.c").read_text(encoding="utf-8")
-LSM9DS1_DOC = (ROOT / "docs" / "LSM9DS1配置说明.md").read_text(encoding="utf-8")
+LSM9DS1_DOC = (ROOT / "docs" / "hardware" / "LSM9DS1配置说明.md").read_text(encoding="utf-8")
 
 
 def test_acc_uses_dc_preserving_antialias_filtering():
