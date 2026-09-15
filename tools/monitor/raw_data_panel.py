@@ -16,7 +16,7 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QFrame, QPushButton,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QSizePolicy,
 )
 import pyqtgraph as pg
 
@@ -219,6 +219,30 @@ def status_packet_to_csv_row(
     ]
 
 
+class _ElidedInfoLabel(QLabel):
+    """保持信息栏单行，完整诊断或设备消息可通过悬浮提示查看。"""
+
+    def __init__(self, text: str):
+        super().__init__()
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setText(text)
+
+    def setText(self, text: str):
+        self._full_text = text
+        self.setToolTip(text)
+        self._update_display()
+
+    def text(self) -> str:
+        return self._full_text
+
+    def _update_display(self):
+        super().setText(self.fontMetrics().elidedText(self._full_text, Qt.ElideRight, self.width()))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_display()
+
+
 class RawDataPanel(QWidget):
     """原始传感器数据可视化面板"""
 
@@ -362,7 +386,7 @@ class RawDataPanel(QWidget):
         self._plot_Ut2._base_title = "Ut2 (mV)"
         ut_layout.addWidget(self._plot_Ut1)
         ut_layout.addWidget(self._plot_Ut2)
-        layout.addWidget(ut_widget, 2)
+        layout.addWidget(ut_widget, 3)  # Ut:Uc 高度保持 3:2
 
         # 桥中电压 Uc1, Uc2
         uc_widget = QWidget()
@@ -405,30 +429,32 @@ class RawDataPanel(QWidget):
         frame = QFrame()
         frame.setObjectName("card")
         frame.setStyleSheet("QLabel { background: transparent; font-size: 9pt; font-weight: 400; }")
-        layout = QGridLayout(frame)
+        layout = QVBoxLayout(frame)
         layout.setContentsMargins(10, 4, 10, 4)
-        layout.setHorizontalSpacing(20)
-        layout.setVerticalSpacing(2)
+        layout.setSpacing(2)
+        rows = [QHBoxLayout(), QHBoxLayout()]
+        for row in rows:
+            row.setSpacing(20)
+            layout.addLayout(row)
         fields = (
-            ("_lbl_mode", "模式: --", COLOR_PRIMARY, 0, 0),
-            ("_lbl_rate", "采样率: 接收 0 Hz | 设备 0 Hz", COLOR_TEXT, 0, 1),
-            ("_lbl_loss", "丢包率: 0.00% (0/0)", COLOR_TEXT, 0, 2),
-            ("_lbl_count", "数据包: 0", COLOR_TEXT_DIM, 0, 3),
-            ("_lbl_realtime_hr", "实时心率: -- | SNR: --", COLOR_TEXT_DIM, 1, 0),
-            ("_lbl_diag", "诊断: --", COLOR_TEXT_DIM, 2, 0),
-            ("_lbl_calib", "", COLOR_GREEN, 2, 3),
+            ("_lbl_mode", "模式: --", COLOR_PRIMARY, 0),
+            ("_lbl_rate", "采样率: 接收 0 Hz | 设备 0 Hz", COLOR_TEXT, 0),
+            ("_lbl_loss", "丢包率: 0.00% (0/0)", COLOR_TEXT, 0),
+            ("_lbl_count", "数据包: 0", COLOR_TEXT_DIM, 0),
+            ("_lbl_calib", "", COLOR_GREEN, 0),
+            ("_lbl_realtime_hr", "实时心率: -- | SNR: --", COLOR_TEXT_DIM, 1),
+            ("_lbl_diag", "诊断: --", COLOR_TEXT_DIM, 1),
         )
-        for name, text, color, row, col in fields:
-            label = QLabel(text)
+        for name, text, color, row in fields:
+            elide = name in ("_lbl_diag", "_lbl_calib")
+            label = _ElidedInfoLabel(text) if elide else QLabel(text)
             label.setFont(ui_font(9))
             label.setStyleSheet(f"color: {color}; background: transparent;")
-            label.setWordWrap(name in ("_lbl_realtime_hr", "_lbl_diag", "_lbl_calib"))
+            label.setWordWrap(False)
             setattr(self, name, label)
-            span = 4 if name == "_lbl_realtime_hr" else 3 if name == "_lbl_diag" else 1
-            layout.addWidget(label, row, col, 1, span)
+            rows[row].addWidget(label, 1 if elide else 0)
         self._lbl_calib.hide()
-        for col in range(4):
-            layout.setColumnStretch(col, 1)
+        rows[0].addStretch()
         return frame
 
     def _make_plot(self, title: str, color: str) -> tuple[pg.PlotWidget, pg.PlotDataItem]:
