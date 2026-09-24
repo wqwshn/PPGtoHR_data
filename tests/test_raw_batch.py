@@ -32,12 +32,13 @@ def test_five_frame_bursts_fragmented_with_status_and_sequence_wrap(monkeypatch)
     assert [p.sequence for p in packets]==seq
 
 
-def test_experiment_modes_removed_from_workbench():
+def test_only_rf_three_cycle_experiment_restored_to_workbench():
     from PyQt5.QtWidgets import QApplication
     from firmware_panel import FirmwarePanel
     app=QApplication.instance() or QApplication([])
     panel=FirmwarePanel(lambda: True)
-    assert all(panel.rf.findData(v)==-1 for v in range(1,8))
+    assert all(panel.rf.findData(v)==-1 for v in (1,3,4,5,6,7))
+    assert panel.rf.findData(2) >= 0
     panel.rf.setCurrentIndex(panel.rf.findData(8))
     assert panel.settings().ble_rf_disabled == 8
     assert not panel.ble.isEnabled()

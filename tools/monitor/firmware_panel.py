@@ -43,7 +43,9 @@ class FirmwarePanel(QWidget):
         form.setSpacing(14)
         self.channel = self._combo([("不使用 PPG · 两路 IIC 关闭 / PPG 填 0", 0), ("PPG 1 · IIC1", 1), ("PPG 2 · IIC2", 2)])
         self.ble = self._combo([("关闭 · 保留模块现有配置", 0), ("开启 · 每次上电初始化蓝牙", 1)])
-        self.rf = self._combo([("标准采集 · 单帧100 Hz / +2.5 dBm", 8), ("自定义初始化 · 保留/重设模块配置", 0)])
+        self.rf = self._combo([("标准采集 · 单帧100 Hz / +2.5 dBm", 8),
+                               ("模块射频复位三轮 · 实际连接30秒 / 保持复位30秒", 2),
+                               ("自定义初始化 · 保留/重设模块配置", 0)])
         self.mode = self._combo([("绿光 + 红光 + 红外（三路采集）", 0), ("红光 + 红外（血氧光模式）", 1)])
         self.speed = self._combo([(f"{x} kHz", x) for x in (100, 400, 1000, 1800)])
         form.addRow("PPG / IIC 通道", self.channel)
@@ -54,6 +56,8 @@ class FirmwarePanel(QWidget):
         form.addRow("输出与采样率", QLabel("原始数据 · 100 Hz（与采集页时间轴一致）"))
         root.addWidget(self.form_box)
         note = QLabel("标准采集：启动复位蓝牙并写入 +2.5 dBm，保持单帧100 Hz。\n"
+                      "模块射频复位三轮：60秒准备后，连接30秒 / 复位30秒，共三轮，释放后等待实际重连。\n"
+                      "热膜对照请选择不使用 PPG；使用有线 COM，在准备期内开始录制，HJ-380 全程插入。\n"
                       "ST-Link：SWDIO → PA13，SWCLK → PA14，GND 共地，建议连接 NRST；按板卡要求供电。")
         note.setWordWrap(True)
         note.setStyleSheet("color: #9BAFC3; font-size: 9pt;")
