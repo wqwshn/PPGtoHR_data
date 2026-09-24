@@ -21,7 +21,7 @@ from rf_events import parse_rf_event
 import serial_reader
 
 
-def test_recording_keeps_snr_raw_median_marker_and_rf_together(tmp_path):
+def test_recording_keeps_snr_raw_marker_and_rf_together(tmp_path):
     app = QApplication.instance() or QApplication([])
     win = Workbench()
     panel = win.monitor._raw_panel
@@ -42,9 +42,8 @@ def test_recording_keeps_snr_raw_median_marker_and_rf_together(tmp_path):
         np.testing.assert_allclose(panel._curve_ppg_g.getData()[1], np.array(panel._data_ppg_g)[-800:] / 16)
 
         # Display and language changes must not end recording or alter raw values.
-        win.monitor._page_title.click()
         win.monitor._btn_lang.click()
-        assert panel.is_recording and not panel._smooth_display
+        assert panel.is_recording
         assert "nA" in panel._plot_ppg_g._base_title
         assert win.monitor._btn_marker.text().endswith("(1)")
         win.close()
@@ -53,13 +52,13 @@ def test_recording_keeps_snr_raw_median_marker_and_rf_together(tmp_path):
             rows = list(csv.DictReader(stream))
         assert len(rows) == 900
         assert float(rows[-1]["PPG_Green"]) == panel._data_ppg_g[-1]
-        assert rows[0]["Median3Valid"] == "0" and rows[2]["Median3Valid"] == "1"
-        assert "Ut1_Median3(mV)" in rows[0]
+        assert not any("Median" in key for key in rows[0])
+        assert float(rows[-1]["Ut1(mV)"]) == round(panel._data_Ut1[-1], 5)
         with paths.marker_path.open(encoding="utf-8-sig", newline="") as stream:
             marker = next(csv.DictReader(stream))
         assert marker["SampleIndex"] == "899"
         settings = json.loads(paths.raw_path.with_name(paths.raw_path.stem + "_processing.json").read_text())
-        assert settings["display_toggle_affects_recording"] is False
+        assert settings["filter"] == "none"
         assert paths.raw_path.with_name(paths.raw_path.stem + "_rf_events.csv").exists()
         assert panel._csv_file is None and panel._rf_csv_file is None and panel._marker_csv_file is None
     finally:

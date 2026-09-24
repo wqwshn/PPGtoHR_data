@@ -561,12 +561,10 @@ class MonitorWindow(QMainWindow):
         layout.setContentsMargins(8, 4, 8, 4)
         layout.setSpacing(6)
         t = TRANSLATIONS[self._lang]
-        self._page_title = QPushButton(t["panel_raw"])
-        self._page_title.setCheckable(True)
+        self._page_title = QLabel(t["panel_raw"])
         self._page_title.setFixedHeight(30)
-        self._page_title.setToolTip("点击切换热膜显示：默认3点中值；按下为纯原始。两种数据始终保存。")
-        self._page_title.toggled.connect(lambda raw: self._set_raw_display(raw))
-        self._page_title.setStyleSheet("QPushButton { background: transparent; border: none; font-size: 10pt; padding: 0 8px; color: #AAB9CA; } QPushButton:hover { background: #243447; } QPushButton:checked { color: #42C7DC; border-bottom: 2px solid #42C7DC; }")
+        self._page_title.setToolTip("热膜显示与保存均为原始信号（不做中值滤波）")
+        self._page_title.setStyleSheet("color: #AAB9CA; font-size: 10pt; padding: 0 8px;")
         layout.addWidget(self._page_title)
         self._combo_port = QComboBox()
         self._combo_port.setFixedWidth(100)
@@ -605,11 +603,6 @@ class MonitorWindow(QMainWindow):
         self._btn_lang = button(t["lang"], True)
         self._btn_lang.clicked.connect(self._toggle_language)
         return frame
-
-    def _set_raw_display(self, raw):
-        if self._raw_panel._smooth_display == raw:
-            self._raw_panel._toggle_smoothing()
-        self._page_title.setToolTip("当前：纯原始热膜显示" if raw else "当前：3点中值热膜显示；点击切换原始")
 
     def _update_record_button(self):
         recording = self._raw_panel.is_recording

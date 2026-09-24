@@ -16,7 +16,7 @@ from typing import Optional
 
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QPushButton, QSizePolicy,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, QSizePolicy,
 )
 import pyqtgraph as pg
 
@@ -51,7 +51,7 @@ TIMELINE_CSV_HEADER = [
     "PPG_Green", "PPG_Red", "PPG_IR",
 ]
 HF_NAMES = ("Uc1", "Uc2", "Ut1", "Ut2")
-RAW_CSV_HEADER = TIMELINE_CSV_HEADER + [f"{ch}_Median3(mV)" for ch in HF_NAMES] + ["Median3Valid"]
+RAW_CSV_HEADER = TIMELINE_CSV_HEADER.copy()
 QUALITY_EVENTS_CSV_HEADER = [
     "EventTime(s)", "EventType", "GapStartSampleIndex", "GapLen", "NextSeq", "PcMissingRaw",
 ]
@@ -252,10 +252,6 @@ class RawDataPanel(QWidget):
         self.setFont(ui_font())
 
         # 数据缓冲区
-        self._hf_history = {ch: deque(maxlen=3) for ch in HF_NAMES}
-        self._hf_smooth = {ch: deque(maxlen=PLOT_BUFFER) for ch in HF_NAMES}
-        self._smooth_display = True
-        self._median_seq = None
         self._data_Uc1 = deque(maxlen=PLOT_BUFFER)
         self._data_Uc2 = deque(maxlen=PLOT_BUFFER)
         self._data_Ut1 = deque(maxlen=PLOT_BUFFER)
@@ -273,7 +269,7 @@ class RawDataPanel(QWidget):
         # 状态
         self._packet_count = 0
         self._sample_count = 0  # 每秒重置, 用于采样率计算
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
         self._quality = RawQualityStats()
         self._last_missing_before = 0
         self._last_rx_hz = 0
@@ -333,17 +329,6 @@ class RawDataPanel(QWidget):
         layout.setSpacing(6)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        self.smoothing_button = QPushButton("热膜显示：3点中值（点击切换原始）")
-        self.smoothing_button.setMinimumHeight(34)
-        self.smoothing_button.setFont(ui_font(10))
-        self.smoothing_button.setStyleSheet(
-            f"QPushButton {{ color: {COLOR_TEXT}; background: {COLOR_CARD}; "
-            f"border: 1px solid {COLOR_CARD_BORDER}; border-radius: 5px; padding: 6px 14px; }}"
-            f"QPushButton:hover {{ border-color: {COLOR_PRIMARY}; }}"
-        )
-        self.smoothing_button.setToolTip("仅影响四路热膜显示；CSV始终保存原始值和尾随3点中值。预热或丢帧后前2点中值为空。")
-        self.smoothing_button.clicked.connect(self._toggle_smoothing)
-        self.smoothing_button.hide() # Controlled by the compact toolbar title button.
         # 顶部信息条
         layout.addWidget(self._build_info_bar())
 
@@ -476,29 +461,11 @@ class RawDataPanel(QWidget):
 
     def _reset_quality_stats(self):
         self._quality.reset()
-        self._median_seq = None
-        for h in self._hf_history.values(): h.clear()
         self._last_missing_before = 0
         self._last_rx_hz = 0
         self._last_device_hz = 0
         self._last_expected_count = 0
         self._sample_count = 0
-
-    def _toggle_smoothing(self):
-        self._smooth_display = not self._smooth_display
-        self.smoothing_button.setText("热膜显示：3点中值（点击切换原始）" if self._smooth_display else "热膜显示：原始（点击切换中值）")
-        self._update_plots()
-
-    def _median_values(self, pkt):
-        if self._median_seq is None or (pkt.sequence-self._median_seq) % 65536 != 1:
-            for h in self._hf_history.values(): h.clear()
-        self._median_seq = pkt.sequence
-        values=[]
-        for ch in HF_NAMES:
-            h=self._hf_history[ch]; h.append(getattr(pkt,ch))
-            v=sorted(h)[1] if len(h)==3 else float('nan')
-            self._hf_smooth[ch].append(v); values.append(v)
-        return values, int(len(self._hf_history['Ut1'])==3)
 
     def handle_raw_data(self, pkt: RawDataPacket):
         """接收并缓存一个多光谱原始数据包"""
@@ -509,7 +476,6 @@ class RawDataPanel(QWidget):
             return
         self._last_missing_before = missing_before
 
-        median_values, median_valid = self._median_values(pkt)
         # 追加数据缓冲区
         self._data_Uc1.append(pkt.Uc1)
         self._data_Uc2.append(pkt.Uc2)
@@ -529,8 +495,6 @@ class RawDataPanel(QWidget):
         if self._is_recording and self._csv_writer:
             sample_index = max(self._quality.expected_count - 1, 0)
             rows = timeline_packet_to_csv_rows(pkt, sample_index, missing_before)
-            for row in rows[:-1]: row.extend(["NaN"] * 4 + [0])
-            rows[-1].extend([round(v,5) for v in median_values] + [median_valid])
             self._csv_writer.writerows(rows)
             self._recorded_sample_count += 1
             self._flush_counter += 1
@@ -580,7 +544,7 @@ class RawDataPanel(QWidget):
                 self._rf_csv_file = self._rf_path.open("w", newline="", encoding="utf-8-sig")
                 self._rf_csv_writer = csv.writer(self._rf_csv_file)
                 self._rf_csv_writer.writerow(RF_CSV_HEADER)
-            elapsed = time.time() - self._recording_start_time
+            elapsed = time.monotonic() - self._recording_start_time
             self._rf_csv_writer.writerow(event_row(event, elapsed, self._quality.expected_count-1, marker))
             self._rf_csv_file.flush()
 
@@ -590,8 +554,8 @@ class RawDataPanel(QWidget):
         self._last_status = status
         self._lbl_diag.setText(status_packet_to_summary(status, snapshot, self._lang))
         if self._is_recording and self._status_csv_writer:
-            start = self._recording_start_time or time.time()
-            elapsed = time.time() - start
+            start = self._recording_start_time or time.monotonic()
+            elapsed = time.monotonic() - start
             self._status_csv_writer.writerow(status_packet_to_csv_row(status, snapshot, elapsed))
             self._status_csv_file.flush()
 
@@ -610,10 +574,10 @@ class RawDataPanel(QWidget):
         self._curve_ppg_ir.setData([v * PPG_ADU_TO_NA for v in list(self._data_ppg_ir)[-VISIBLE_POINTS:]])
 
         # 桥压波形
-        self._curve_Ut1.setData(list(self._hf_smooth["Ut1"] if self._smooth_display else self._data_Ut1)[-VISIBLE_POINTS:])
-        self._curve_Ut2.setData(list(self._hf_smooth["Ut2"] if self._smooth_display else self._data_Ut2)[-VISIBLE_POINTS:])
-        self._curve_Uc1.setData(list(self._hf_smooth["Uc1"] if self._smooth_display else self._data_Uc1)[-VISIBLE_POINTS:])
-        self._curve_Uc2.setData(list(self._hf_smooth["Uc2"] if self._smooth_display else self._data_Uc2)[-VISIBLE_POINTS:])
+        self._curve_Ut1.setData(list(self._data_Ut1)[-VISIBLE_POINTS:])
+        self._curve_Ut2.setData(list(self._data_Ut2)[-VISIBLE_POINTS:])
+        self._curve_Uc1.setData(list(self._data_Uc1)[-VISIBLE_POINTS:])
+        self._curve_Uc2.setData(list(self._data_Uc2)[-VISIBLE_POINTS:])
 
         # 加速度计波形
         self._curve_accx.setData(list(self._data_Accx)[-VISIBLE_POINTS:])
@@ -751,13 +715,12 @@ class RawDataPanel(QWidget):
             self._csv_writer = csv.writer(self._csv_file)
             self._csv_writer.writerow(RAW_CSV_HEADER)
             raw_path.with_name(raw_path.stem + "_processing.json").write_text(json.dumps({
-                "schema_version": 1, "sample_rate_hz": 100,
+                "schema_version": 2, "sample_rate_hz": RAW_RECORD_SAMPLE_RATE_HZ,
                 "raw_columns_unchanged": True, "channels": list(HF_NAMES),
-                "filter": "trailing_median", "window_samples": 3,
-                "time_alignment": "current sample; window center is 10 ms earlier",
-                "warmup": "first two samples NaN; Median3Valid=0",
-                "gap_policy": "reset on any nonconsecutive sequence",
-                "display_toggle_affects_recording": False
+                "filter": "none",
+                "time_alignment": "SampleIndex / sample_rate_hz",
+                "gap_policy": "missing samples saved as NaN; ValidFlag=0",
+                "elapsed_clock": "monotonic"
             }, ensure_ascii=False, indent=2), encoding="utf-8")
             self._status_csv_file = open(status_path, "w", newline="", encoding="utf-8-sig")
             self._status_csv_writer = csv.writer(self._status_csv_file)
@@ -765,7 +728,7 @@ class RawDataPanel(QWidget):
             self._marker_path = marker_path
             self._marker_count = 0
             self._rf_path = raw_path.with_name(raw_path.stem + "_rf_events.csv")
-            self._recording_start_time = time.time()
+            self._recording_start_time = time.monotonic()
             self._recorded_sample_count = 0
             self._reset_quality_stats()
             self._is_recording = True
@@ -819,7 +782,7 @@ class RawDataPanel(QWidget):
             self._marker_csv_writer = csv.writer(self._marker_csv_file)
             self._marker_csv_writer.writerow(["Elapsed(s)", "SampleIndex", "MarkerNo", "Note"])
         self._marker_count += 1
-        elapsed = time.time() - (self._recording_start_time or time.time())
+        elapsed = time.monotonic() - (self._recording_start_time or time.monotonic())
         sample_index = max(self._quality.expected_count - 1, 0)
         self._marker_csv_writer.writerow([
             f"{elapsed:.3f}", sample_index,
@@ -847,9 +810,8 @@ class RawDataPanel(QWidget):
         ):
             d.clear()
 
-        for h in self._hf_smooth.values(): h.clear()
         self._packet_count = 0
-        self._start_time = time.time()
+        self._start_time = time.monotonic()
         self._reset_quality_stats()
 
         # 停止录制
