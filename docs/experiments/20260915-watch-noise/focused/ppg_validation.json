@@ -1,0 +1,7 @@
+{
+  "records": 48,
+  "raw_continuity": "passed",
+  "event_integrity": "passed",
+  "metric_consistency": "24 PPG-on windows match existing rf_metrics.csv",
+  "ppg_off_read_activity": "zero PPG output and zero FIFO sample delta"
+}

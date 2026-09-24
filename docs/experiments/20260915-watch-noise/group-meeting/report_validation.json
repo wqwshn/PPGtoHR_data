@@ -1,0 +1,37 @@
+{
+  "figures": 6,
+  "fonts": {
+    "04-startup-trend.png": [
+      "BHJLVU+SimSun",
+      "ELUGPM+ArialMT"
+    ],
+    "05-raw.png": [
+      "BHJLVU+SimSun",
+      "ELUGPM+ArialMT"
+    ],
+    "06-rms.png": [
+      "BHJLVU+SimSun",
+      "ELUGPM+ArialMT"
+    ],
+    "07-spectrum-composite.png": [
+      "BHJLVU+SimSun",
+      "ELUGPM+ArialMT"
+    ],
+    "03-wearing-33hz.png": [
+      "BHJLVU+SimSun",
+      "ELUGPM+ArialMT"
+    ],
+    "01-motion-filter.png": [
+      "BHJLVU+SimSun",
+      "ELUGPM+ArialMT"
+    ]
+  },
+  "motion_interval_s": [
+    58.02,
+    78.02
+  ],
+  "motion_r": [
+    0.996192,
+    0.994478
+  ]
+}

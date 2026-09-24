@@ -1,0 +1,11 @@
+{
+  "synthetic_33Hz_rms": 0.7071067811865686,
+  "synthetic_2Hz_rms": 0.2828427112602571,
+  "source_recordings": 6,
+  "gap_duplicate_sequence_checks": "passed",
+  "psd_power_normalization": "passed",
+  "python": "3.11.7 | packaged by Anaconda, Inc. | (main, Dec 15 2023, 18:05:47) [MSC v.1916 64 bit (AMD64)]",
+  "numpy": "1.26.4",
+  "pandas": "3.0.2",
+  "scipy": "1.17.1"
+}

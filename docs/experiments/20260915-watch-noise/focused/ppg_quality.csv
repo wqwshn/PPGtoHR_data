@@ -1,0 +1,3 @@
+﻿ppg,rows,duration_s,ppg_nonzero,fifo_samples_delta,complete,event_gap,queue_dropped
+PPG开启,28419,284.19,28419,28306,1,0,0
+PPG关闭,22402,224.02,0,0,1,0,0

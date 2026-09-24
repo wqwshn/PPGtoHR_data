@@ -1,0 +1,8 @@
+{
+  "synthetic_rms": 0.7874007846396573,
+  "expected_rms": 0.7874007874011811,
+  "low_frequency_leakage_rms": 0.003671683448492879,
+  "quality_records": 10,
+  "rf_phase_windows": 24,
+  "alignment_max_pct": 0.1676522526452784
+}

@@ -1,0 +1,59 @@
+[
+  {
+    "file": "recordings\\20260922-提升容值的项目腕表开机及静息记录\\kaiji1_LYX_0922.csv",
+    "sha256": "fccc3013d46f18920cbc557ba699ae6ea2dceb2324ce5909374b4b078d4b6b32",
+    "rows": 91428,
+    "duration_s": 914.28,
+    "mcu_start_s": 17.872999999999998,
+    "mcu_end_s": 932.143,
+    "errors": {
+      "TxBusyCounter": 0,
+      "TxErrorCounter": 0,
+      "AdcErrorCounter": 0,
+      "ImuErrorCounter": 0,
+      "PcMissingRaw": 0,
+      "PcRawInvalidCandidates": 0,
+      "PpgFifoOverflowCounter": 0
+    },
+    "ppg_nonzero_rows": 91428,
+    "fifo_samples_delta": 91685
+  },
+  {
+    "file": "recordings\\20260914-热膜噪声蓝牙问题分析(蓝牙电容容值不足)\\项目腕表开机稳定后记录\\kaiji2_LYX_0915.csv",
+    "sha256": "6ad546bacbb4add4d712286bc2a467437021463fe0f5dfbb3005721506612afc",
+    "rows": 8957,
+    "duration_s": 89.57,
+    "mcu_start_s": 651.465,
+    "mcu_end_s": 741.025,
+    "errors": {
+      "TxBusyCounter": 0,
+      "TxErrorCounter": 0,
+      "AdcErrorCounter": 0,
+      "ImuErrorCounter": 0,
+      "PcMissingRaw": 0,
+      "PcRawInvalidCandidates": 0,
+      "PpgFifoOverflowCounter": 0
+    },
+    "ppg_nonzero_rows": 8957,
+    "fifo_samples_delta": 8791
+  },
+  {
+    "file": "recordings\\20260914-热膜噪声蓝牙问题分析(蓝牙电容容值不足)\\项目腕表开机记录（长时间）\\kaiji2_LYX_0915.csv",
+    "sha256": "7a71362363d783bddedfb9edc3c060d1b2bf9852d746b6b943729684bde89352",
+    "rows": 62143,
+    "duration_s": 621.43,
+    "mcu_start_s": 15.125000000000009,
+    "mcu_end_s": 636.545,
+    "errors": {
+      "TxBusyCounter": 0,
+      "TxErrorCounter": 0,
+      "AdcErrorCounter": 0,
+      "ImuErrorCounter": 0,
+      "PcMissingRaw": 0,
+      "PcRawInvalidCandidates": 0,
+      "PpgFifoOverflowCounter": 0
+    },
+    "ppg_nonzero_rows": 62143,
+    "fifo_samples_delta": 61991
+  }
+]

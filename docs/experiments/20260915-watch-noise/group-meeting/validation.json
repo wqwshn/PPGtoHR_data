@@ -1,0 +1,19 @@
+{
+  "samples": 8554,
+  "duration_s": 85.54,
+  "sha256": "064348f6b791d8f61d7d6bfedda7d1bdad089643e16c9f5db4f0688cdf106201",
+  "source": "recordings\\20260914-热膜噪声蓝牙问题分析\\项目腕表佩戴后运动产生响应\\202609-multiperson\\0915-LYX\\kaiji1_LYX_0915.csv",
+  "median_recomputation": "all four channels passed",
+  "errors": {
+    "TxBusyCounter": 0,
+    "TxErrorCounter": 0,
+    "AdcErrorCounter": 0,
+    "ImuErrorCounter": 0,
+    "PcMissingRaw": 0,
+    "PcRawInvalidCandidates": 0
+  },
+  "motion_start_s": 58.02,
+  "quiet_start_s": 19.02,
+  "gyro_rms_motion": 159.5931193221202,
+  "gyro_rms_quiet": 0.32745731782936227
+}

@@ -1,0 +1,15 @@
+{
+  "synthetic_rms_2hz": "passed",
+  "synthetic_rms_nyquist": "passed",
+  "figure_links": 2,
+  "visual_review": "Both final figures inspected, inset and parent alignment audited separately, collision audits passed.",
+  "style_exceptions": "8 inch report width and 300 dpi PNG retained deliberately; SVG/PDF supplied.",
+  "sampling": "All 91428 valid raw samples retained; 30 complete 30-second windows, 1428 trailing samples covered by late-window analysis; startup chart aggregates 914 full seconds and omits final 28 samples only in that 1-second-mean view.",
+  "display_window": "last 30 seconds; PSD last 60 seconds",
+  "main_y_span_mV": 60,
+  "inset_y_span_mV": 5,
+  "colors": [
+    "#d986a2",
+    "#eba9bc"
+  ]
+}
