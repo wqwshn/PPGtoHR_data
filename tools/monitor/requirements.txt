@@ -1,4 +1,5 @@
-PyQt5>=5.15
-pyqtgraph>=0.13
-pyserial>=3.5
-numpy>=1.24
+# Runtime versions used by the validated Windows acquisition workbench.
+PyQt5==5.15.10
+pyqtgraph==0.14.0
+pyserial==3.5
+numpy==1.26.4
