@@ -23,6 +23,9 @@ SCENARIO_OPTIONS: tuple[tuple[str, str], ...] = (
     ("快速出拳", "quanji"),
     ("高抬腿", "gaotai"),
     ("开机", "kaiji"),
+    ("温漂测试", "wenpiao"),
+    ("接近度/接触压力测试（上到下：接触压力→接近度）", "PnP_down"),
+    ("接近度/接触压力测试（下到上：接近度→接触压力）", "PnP_up"),
 )
 _SCENARIO_TOKENS = frozenset(token for _, token in SCENARIO_OPTIONS)
 _SUBJECT_RE = re.compile(r"^[A-Z]{1,8}$")

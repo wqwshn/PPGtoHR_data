@@ -19,6 +19,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "string.h"
+#include <stdio.h>
 #include "ADC_ADS124.h"
 #include "MIMU.h"
 #include "MAX30101.h"
@@ -26,6 +27,7 @@
 #include "ppg_channel.h"
 #include "hr_algorithm.h"
 #include "sample_rate_config.h"
+#include "board_check.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -93,6 +95,13 @@ static volatile uint32_t raw_diag_ppg_fifo_sample_total_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_nonempty_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_single_sample_counter = 0;
 static volatile uint32_t raw_diag_ppg_fifo_multi_sample_counter = 0;
+/* 主循环初始化/重试期间禁止采集中断访问SPI2。 */
+static volatile uint8_t mimu_ready = 0;
+static volatile uint8_t mimu_state = MIMU_STATE_INITIALIZING;
+#if ENABLE_MIMU_RECOVERY
+static uint8_t mimu_recovery_warming = 0;
+static uint32_t mimu_last_retry_ms = 0;
+#endif
 
 #include "ble_experiment_transport.h"
 #include "ble_power_transport.h"
@@ -125,6 +134,13 @@ static uint8_t algorithm_initialized = 0;
 uint8_t CheckXOR(uint8_t *Buf, uint8_t Len);
 static void WriteU32BE(uint8_t *dst, uint32_t value);
 static void BuildStatusFrame(void);
+static void Acquisition_DebugPoll(void);
+static void Acquisition_DebugADC(const char *phase);
+static void MIMU_Startup(void);
+static void MIMU_PollRecovery(void);
+#if (PPG_DEFAULT_CHANNEL != 0)
+static uint8_t Acquisition_DebugPPG(uint8_t configured);
+#endif
 
 // PPG配置函数
 #if (CURRENT_WORK_MODE == MODE_SPO2)
@@ -167,7 +183,6 @@ int main(void)
 
   /* USER CODE BEGIN Init */
   char ADCbuff[] = "ADC ERROR!";
-  char MIMUbuff[] = "MIMU ERROR!";
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -187,6 +202,22 @@ int main(void)
   MX_TIM3_Init();
   MX_TIM15_Init();
   /* USER CODE BEGIN 2 */
+#if ENABLE_BOARD_CHECK
+#if ENABLE_BLE_CONFIG
+  /* Reuse the acquisition firmware's hardware-verified first-board setup. */
+  HAL_Delay(500);
+  {
+      static const uint8_t note[] = "BOARD CHECK: BLE factory/project setup starting; verify after setup.\r\n";
+      HAL_UART_Transmit(&huart2, (uint8_t *)note, sizeof(note) - 1, 1000);
+  }
+  BLE_Init();
+#endif
+  BoardCheck_Run();
+  while (1) {
+      HAL_Delay(5000);
+      BoardCheck_PrintSummary();
+  }
+#endif
   // 2. 初始化 MSP (通常由 HAL 自动调用，这里显式调用也可)
   HAL_UART_MspInit(&huart2);
   HAL_SPI_MspInit(&hspi1);
@@ -255,7 +286,7 @@ int main(void)
 #endif
   PPG_SetChannel(PPG_DEFAULT_CHANNEL);
 #if (PPG_DEFAULT_CHANNEL != 0)
-  if (PPG_Check() != 0) {
+  if (Acquisition_DebugPPG(0)) {
       HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MAX30101 Found!\r\n", 24, 100);
       HAL_Delay(100);
   } else {
@@ -265,6 +296,7 @@ int main(void)
 #endif /* PPG enabled */
 
   /* 2. ADC 检测 (阻塞式) */
+  if (ENABLE_ACQUISITION_DEBUG) Acquisition_DebugADC("pre-init");
   while (!ADC_check()) {
       HAL_UART_Transmit(&huart2, (uint8_t*)ADCbuff, sizeof(ADCbuff), 100);
       HAL_UART_Transmit(&huart2, (uint8_t*)"\r\n", 2, 100);
@@ -273,65 +305,51 @@ int main(void)
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: ADC Found!\r\n", 19, 100);
   HAL_Delay(100);
 
-//   /* 3. MIMU 检测 (阻塞式) */
-//   while (!MIMU_check()) {
-//       HAL_UART_Transmit(&huart2, (uint8_t*)MIMUbuff, sizeof(MIMUbuff), 100);
-//       HAL_Delay(500);
-//   }
-//   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Found!\r\n", 20, 100);
-//   HAL_Delay(100);
-
   /* ====================================================================
    * 模块初始化配置 (Sensor Init Phase)
    * ==================================================================== */
 
   /* 1. ADC 初始化 */
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before ADC_Init\r\n", 22, 1000);
   ADC_Init();
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: ADC Init OK\r\n", 20, 1000);
+  {
+      static const uint8_t note[] = "[DEBUG-acq] ADC init writes done; verification pending\r\n";
+      if (ENABLE_ACQUISITION_DEBUG) HAL_UART_Transmit(&huart2, (uint8_t *)note, sizeof(note) - 1, 1000);
+  }
+  Acquisition_DebugADC("post-init");
   HAL_Delay(200);
 
   /* 2. MIMU 初始化 */
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before MIMU_Init\r\n", 23, 1000);
-  MIMU_Init();
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: MIMU Init OK\r\n", 21, 1000);
-  HAL_Delay(200);
-
-  /* 2.1 从 Flash 加载历史陀螺仪零偏 (若无则默认0) */
-  MIMU_LoadGyroOffset();
-
-  /* 2.2 陀螺仪零偏标定 (暖机+800样本+std校验+Flash存储) */
-  MIMU_GyroCalibrate();
+  MIMU_Startup();
 
 #if (PPG_DEFAULT_CHANNEL != 0)
   /* 3. MAX30101 初始化 (通过通道接口) */
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before MAX30101_Init\r\n", 28, 1000);
   PPG_Init();
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG Init OK\r\n", 20, 1000);
+  {
+      static const uint8_t note[] = "[DEBUG-acq] PPG init writes done; verification pending\r\n";
+      if (ENABLE_ACQUISITION_DEBUG) HAL_UART_Transmit(&huart2, (uint8_t *)note, sizeof(note) - 1, 1000);
+  }
   HAL_Delay(200);
 
   /* 4. 根据当前模式配置 PPG 参数 */
 #if (CURRENT_WORK_MODE == MODE_SPO2)
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before PPG SpO2 Config\r\n", 29, 1000);
   PPG_Config_SpO2_Hardcoded();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG SpO2 Mode Config.\r\n", 30, 100);
 #else
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before PPG HR Config\r\n", 28, 1000);
   PPG_Config_Green_Hardcoded();
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: PPG HR Mode Config.\r\n", 28, 100);
 #endif
 
+  /* STOP 后留出空闲时间，再检查 MCU 是否释放及引脚实际电平。 */
+  HAL_Delay(2);
+  Acquisition_DebugPPG(1);
 #endif /* PPG enabled */
 
   /* ====================================================================
    * 心率在线算法初始化 (仅在线心率模式)
    * ==================================================================== */
 #if (!ENABLE_RAW_DATA_PACKET)
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: before HR_Init\r\n", 21, 1000);
   HR_GetDefaultConfig(&hr_config);
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: HR_GetDefaultConfig OK\r\n", 29, 1000);
   HR_Init(&hr_config, &hr_state);
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DBG: HR_Init OK\r\n", 17, 1000);
   algorithm_initialized = 1;
   HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: HR Algorithm Init OK\r\n", 29, 1000);
 #endif
@@ -350,9 +368,16 @@ int main(void)
 #if BLE_RF_EXPERIMENT || BLE_POWER_EXPERIMENT
   RF_Start();
 #endif
-  HAL_TIM_Base_Start_IT(&htim16); // ADC + MIMU tick
+  {
+      HAL_StatusTypeDef timer_status = HAL_TIM_Base_Start_IT(&htim16);
+      char line[128];
+      snprintf(line, sizeof(line), "[SYSTEM] TIM16 start=%u PPG=%u rate=%u raw=%u mode=%u; UART=115200 8N1\r\n",
+               (unsigned)timer_status, PPG_DEFAULT_CHANNEL, PPG_SAMPLE_RATE,
+               ENABLE_RAW_DATA_PACKET, CURRENT_WORK_MODE);
+      HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+  }
 
-  HAL_UART_Transmit(&huart2, (uint8_t*)"DEBUG: System Start Loop...\r\n", 29, 1000);
+
 
   /* USER CODE END 2 */
 
@@ -360,6 +385,8 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+    MIMU_PollRecovery();
+    Acquisition_DebugPoll();
 #if BLE_RF_EXPERIMENT || BLE_POWER_EXPERIMENT
     RF_Poll();
 #endif
@@ -834,10 +861,285 @@ static void BuildStatusFrame(void)
   WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_sample_total_counter); pos += 4;
   WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_nonempty_counter); pos += 4;
   WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_single_sample_counter); pos += 4;
-  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_multi_sample_counter);
+  WriteU32BE(&statusData[pos], raw_diag_ppg_fifo_multi_sample_counter); pos += 4;
+  WriteU32BE(&statusData[pos], mimu_state);
 
   statusData[STATUS_XOR_INDEX] = CheckXOR(&statusData[2], STATUS_XOR_CHECK_LEN);
   statusData[STATUS_FOOTER_INDEX] = 0xCC;
+}
+
+static void MIMU_Startup(void)
+{
+#if ENABLE_MIMU_RECOVERY
+    static const uint8_t settling[] = "[MIMU] power settling 1000 ms; startup retry enabled\r\n";
+    HAL_UART_Transmit(&huart2, (uint8_t *)settling, sizeof(settling) - 1, 1000);
+    HAL_Delay(1000);
+    const unsigned attempts = 5;
+#else
+    const unsigned attempts = 1;
+#endif
+    for (unsigned attempt = 1; attempt <= attempts; ++attempt) {
+        if (MIMU_Init()) {
+            static const uint8_t ok[] = "DEBUG: MIMU Init OK (AG identity/config verified)\r\n";
+            HAL_UART_Transmit(&huart2, (uint8_t *)ok, sizeof(ok) - 1, 1000);
+            HAL_Delay(200);
+            MIMU_LoadGyroOffset();
+            MIMU_GyroCalibrate();
+            mimu_ready = 1;
+            mimu_state = MIMU_STATE_BOOT_READY;
+            return;
+        }
+        raw_diag_imu_error_counter++;
+        char line[96];
+        snprintf(line, sizeof(line), "[MIMU] init FAIL attempt=%u/%u; identity/config not verified\r\n", attempt, attempts);
+        HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+        if (attempt < attempts) HAL_Delay(500);
+    }
+#if ENABLE_MIMU_RECOVERY
+    mimu_last_retry_ms = HAL_GetTick();
+    mimu_state = MIMU_STATE_RETRYING;
+    static const uint8_t failed[] = "[MIMU] offline; ACC/GYRO zero; calibration skipped; retry every 2000 ms\r\n";
+#else
+    mimu_state = MIMU_STATE_OFFLINE;
+    static const uint8_t failed[] = "[MIMU] offline; ACC/GYRO zero; calibration skipped; recovery disabled\r\n";
+#endif
+    HAL_UART_Transmit(&huart2, (uint8_t *)failed, sizeof(failed) - 1, 1000);
+}
+
+static void MIMU_PollRecovery(void)
+{
+#if ENABLE_MIMU_RECOVERY
+    if (mimu_ready) return;
+    uint32_t now = HAL_GetTick();
+    if (mimu_recovery_warming) {
+        if ((uint32_t)(now - mimu_last_retry_ms) < 200U || huart2.gState != HAL_UART_STATE_READY) return;
+        /* 不在运行中执行10秒标定/Flash写入；有效历史偏置不存在时沿用零偏0。 */
+        MIMU_LoadGyroOffset();
+        ACC_6BytesRead();
+        GYRO_6BytesRead();
+        mimu_recovery_warming = 0;
+        mimu_ready = 1;
+        mimu_state = MIMU_STATE_RECOVERED;
+        static const uint8_t recovered[] = "[MIMU] recovered; identity/config verified; saved offset if valid; live calibration skipped\r\n";
+        HAL_UART_Transmit(&huart2, (uint8_t *)recovered, sizeof(recovered) - 1, 100);
+        return;
+    }
+    if ((uint32_t)(now - mimu_last_retry_ms) < 2000U || huart2.gState != HAL_UART_STATE_READY) return;
+    mimu_last_retry_ms = now;
+    if (!MIMU_Init()) {
+        raw_diag_imu_error_counter++;
+        static const uint8_t failed[] = "[MIMU] recovery FAIL; retry in 2000 ms\r\n";
+        HAL_UART_Transmit(&huart2, (uint8_t *)failed, sizeof(failed) - 1, 100);
+        return;
+    }
+    /* 时间戳暖机期间让ADC/PPG继续采集，MIMU中断读取仍关闭。 */
+    mimu_recovery_warming = 1;
+    mimu_last_retry_ms = HAL_GetTick();
+#endif
+}
+
+/* 新板取证：仅启动读回和无组帧心跳，不在 ISR 打印或改写器件配置。 */
+static void Acquisition_DebugADC(const char *phase)
+{
+    const uint8_t regs[] = {ADC_ID_REG, ADC_STATUS_REG, ADC_MUX_REG,
+                           ADC_GSET_REG, ADC_RATE_REG, ADC_RCON_REG, ADC_SCON_REG};
+    char line[224];
+    if (ENABLE_ACQUISITION_DEBUG) {
+    snprintf(line, sizeof(line), "[DEBUG-acq] ADC %s RESET=%u RESET_ODR=%u START=%u DRDY=%u MISO=%u CE5=%u CE1V8=%u\r\n",
+        phase, (unsigned)HAL_GPIO_ReadPin(AD_RESET_GPIO_Port, AD_RESET_Pin),
+        (unsigned)((AD_RESET_GPIO_Port->ODR & AD_RESET_Pin) != 0),
+        (unsigned)HAL_GPIO_ReadPin(START_CONV_GPIO_Port, START_CONV_Pin),
+        (unsigned)HAL_GPIO_ReadPin(DRDY_GPIO_Port, DRDY_Pin),
+        (unsigned)HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_6),
+        (unsigned)HAL_GPIO_ReadPin(V5_0_CE_GPIO_Port, V5_0_CE_Pin),
+        (unsigned)HAL_GPIO_ReadPin(V1_8_CE_GPIO_Port, V1_8_CE_Pin));
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+    }
+    /* CS 上升沿使事务从明确边界开始；不更改 SPI 模式或器件寄存器。 */
+    HAL_GPIO_WritePin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin, GPIO_PIN_SET);
+    HAL_Delay(1);
+    uint8_t identity_ok = 0, config_ok = 1;
+    const uint8_t expected[] = {0, 0, 0x3C, 0x00, 0x2C, 0x3A, 0x10};
+    for (unsigned i = 0; i < sizeof(regs); ++i) {
+        uint8_t tx[] = {(uint8_t)(0x20U | regs[i]), 0, 0}, rx[3] = {0};
+        HAL_GPIO_WritePin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin, GPIO_PIN_RESET);
+        HAL_StatusTypeDef status = HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 50);
+        HAL_GPIO_WritePin(SPI1_NSS_GPIO_Port, SPI1_NSS_Pin, GPIO_PIN_SET);
+        if (i == 0) identity_ok = status == HAL_OK && (rx[2] & 0x07U) == 0x01U;
+        if (i >= 2 && (status != HAL_OK || rx[2] != expected[i])) config_ok = 0;
+        if (ENABLE_ACQUISITION_DEBUG) {
+        snprintf(line, sizeof(line), "[DEBUG-acq] ADC %s reg=0x%02X SPI=%u RX=%02X/%02X/%02X value=0x%02X transport_ok=%u\r\n",
+                 phase, regs[i], (unsigned)status, rx[0], rx[1], rx[2], rx[2], status == HAL_OK);
+        HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+        }
+    }
+    snprintf(line, sizeof(line), "[ADC] %s identity=%s config=%s (pre-init config is informational)\r\n",
+             phase, identity_ok ? "PASS" : "FAIL", identity_ok && config_ok ? "PASS" : "FAIL");
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+}
+
+#if (PPG_DEFAULT_CHANNEL != 0)
+/* 0=成功，1=总线低，2=写地址NACK，3=寄存器地址NACK，4=读地址NACK。 */
+static uint8_t Acquisition_ReadPPG(uint8_t reg, uint8_t *value)
+{
+    uint8_t second = PPG_GetChannel() == PPG_CH2;
+    void (*start)(void) = second ? IIC2_Start : IIC_Start;
+    void (*stop)(void) = second ? IIC2_Stop : IIC_Stop;
+    void (*send)(uint8_t) = second ? IIC2_Send_Byte : IIC_Send_Byte;
+    uint8_t (*ack)(void) = second ? IIC2_Wait_Ack : IIC_Wait_Ack;
+    uint8_t (*read)(uint8_t) = second ? IIC2_Read_Byte : IIC_Read_Byte;
+    GPIO_TypeDef *port = second ? I2C_SCL2_GPIO_Port : I2C_SCL1_GPIO_Port;
+    uint16_t scl = second ? I2C_SCL2_Pin : I2C_SCL1_Pin;
+    uint16_t sda = second ? I2C_SDA2_Pin : I2C_SDA1_Pin;
+    if (!HAL_GPIO_ReadPin(port, scl) || !HAL_GPIO_ReadPin(port, sda)) return 1;
+    uint8_t result = 2;
+    start();
+    send(0xAE);
+    if (ack()) goto done;
+    result = 3;
+    send(reg);
+    if (ack()) goto done;
+    result = 4;
+    start();
+    send(0xAF);
+    if (ack()) goto done;
+    *value = read(0);
+    result = 0;
+done:
+    stop();
+    return result;
+}
+
+static uint8_t Acquisition_DebugPPG(uint8_t configured)
+{
+    /* FE/FIFO 仅展示；其余寄存器逐项与当前模式目标值比较。 */
+    const uint8_t regs[] = {0xFF, 0xFE, MODE_CONFIG_REG, SPO2_CONFIG_REG,
+        FIFO_CONFIG_REG, LED1_PA_REG, LED2_PA_REG, LED3_PA_REG,
+        LED_CONTROL1, LED_CONTROL2, FIFO_WR_PTR_REG, FIFO_RD_PTR_REG, OVF_COUNTER_REG};
+#if (CURRENT_WORK_MODE == MODE_SPO2)
+    const uint8_t expected[] = {0x15, 0, 0x03, 0x77, 0x5F, 0xC0, 0xC0};
+#else
+    const uint8_t expected[] = {0x15, 0, 0x07, MAX30101_SPO2_CONFIG_VAL,
+        MAX30101_FIFO_CONFIG_VAL, 0xC0, 0xC0, 0xE0,
+        MAX30101_MULTI_LED_CTRL1_VAL, MAX30101_MULTI_LED_CTRL2_VAL};
+#endif
+    uint8_t second = PPG_GetChannel() == PPG_CH2;
+    GPIO_TypeDef *port = second ? I2C_SCL2_GPIO_Port : I2C_SCL1_GPIO_Port;
+    char line[224];
+    if (ENABLE_ACQUISITION_DEBUG) {
+    snprintf(line, sizeof(line), "[DEBUG-acq] PPG GPIO %s ODR=0x%04lX IDR=0x%04lX MODER=0x%08lX OTYPER=0x%04lX (ODR bit0/1: 1=release in OD mode)\r\n",
+        configured ? "post-config" : "pre-init", (unsigned long)port->ODR,
+        (unsigned long)port->IDR, (unsigned long)port->MODER, (unsigned long)port->OTYPER);
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+    snprintf(line, sizeof(line), "[DEBUG-acq] PPG%u %s SCL=%u SDA=%u (pins=%s)\r\n",
+        (unsigned)PPG_GetChannel(), configured ? "post-config" : "pre-init",
+        (unsigned)HAL_GPIO_ReadPin(port, second ? I2C_SCL2_Pin : I2C_SCL1_Pin),
+        (unsigned)HAL_GPIO_ReadPin(port, second ? I2C_SDA2_Pin : I2C_SDA1_Pin),
+        second ? "PB0/PB1" : "PA0/PA1");
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+    }
+    uint8_t verified = 1;
+    for (unsigned i = 0; i < (configured ? sizeof(regs) : 2U); ++i) {
+        uint8_t value = 0;
+        uint8_t status = Acquisition_ReadPPG(regs[i], &value);
+        if (status) {
+            snprintf(line, sizeof(line), "[PPG] reg=0x%02X FAIL stage=%u (1=BUS_LOW 2=ADDR_W 3=REG 4=ADDR_R); value=NA\r\n",
+                     regs[i], status);
+            HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+            verified = 0;
+            break;
+        }
+        uint8_t mismatch = 0;
+        if (i != 1 && i < sizeof(expected)) {
+            uint8_t match = value == expected[i];
+            verified &= match;
+            mismatch = !match;
+            snprintf(line, sizeof(line), "[PPG] reg=0x%02X value=0x%02X expected=0x%02X %s\r\n",
+                     regs[i], value, expected[i], match ? "OK" : "MISMATCH");
+        } else {
+            snprintf(line, sizeof(line), "[PPG] reg=0x%02X value=0x%02X ACK\r\n", regs[i], value);
+        }
+        if (ENABLE_ACQUISITION_DEBUG || mismatch)
+            HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+    }
+    snprintf(line, sizeof(line), "[PPG] %s %s\r\n",
+             configured ? "config" : "identity", verified ? "VERIFIED" : "FAIL");
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+    return verified;
+}
+
+/* PPG 从未产出样本时保留延后证据，供晚连接的蓝牙接收；只读，不重配置。 */
+static void Acquisition_DebugPPGLive(uint32_t now)
+{
+    if (!ENABLE_ACQUISITION_DEBUG) return;
+    static uint32_t last_ms;
+    if (raw_diag_ppg_fifo_nonempty_counter != 0 || huart2.gState != HAL_UART_STATE_READY ||
+        (uint32_t)(now - last_ms) < 10000U) return;
+    last_ms = now;
+    uint8_t second = PPG_GetChannel() == PPG_CH2;
+    GPIO_TypeDef *port = second ? I2C_SCL2_GPIO_Port : I2C_SCL1_GPIO_Port;
+    const uint8_t regs[] = {0xFF, MODE_CONFIG_REG, SPO2_CONFIG_REG, FIFO_CONFIG_REG,
+        LED1_PA_REG, LED2_PA_REG, LED3_PA_REG, LED_CONTROL1, LED_CONTROL2,
+        FIFO_WR_PTR_REG, FIFO_RD_PTR_REG, OVF_COUNTER_REG};
+    char line[320];
+    unsigned pos = (unsigned)snprintf(line, sizeof(line),
+        "[DEBUG-ppg-live] ms=%lu ch=%u SCL=%u SDA=%u ODR=0x%04lX ",
+        (unsigned long)now, (unsigned)PPG_GetChannel(),
+        (unsigned)HAL_GPIO_ReadPin(port, second ? I2C_SCL2_Pin : I2C_SCL1_Pin),
+        (unsigned)HAL_GPIO_ReadPin(port, second ? I2C_SDA2_Pin : I2C_SDA1_Pin),
+        (unsigned long)port->ODR);
+    for (unsigned i = 0; i < sizeof(regs); ++i) {
+        uint8_t value = 0;
+        uint8_t stage = Acquisition_ReadPPG(regs[i], &value);
+        if (stage) {
+            pos += (unsigned)snprintf(line + pos, sizeof(line) - pos,
+                "FAIL reg=0x%02X stage=%u value=NA ", regs[i], stage);
+            break;
+        }
+        pos += (unsigned)snprintf(line + pos, sizeof(line) - pos, "%02X=%02X ", regs[i], value);
+    }
+    snprintf(line + pos, sizeof(line) - pos, "nonempty=%lu empty=%lu\r\n",
+        (unsigned long)raw_diag_ppg_fifo_nonempty_counter, (unsigned long)raw_diag_ppg_fifo_empty_counter);
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+}
+#endif
+
+static void Acquisition_DebugPoll(void)
+{
+    if (!ENABLE_ACQUISITION_DEBUG) return;
+    static uint32_t last_ms, last_frames, last_done;
+    static uint8_t started;
+    uint32_t now = HAL_GetTick();
+#if (PPG_DEFAULT_CHANNEL != 0)
+    /* 到期后持续等待首个UART空闲窗口，避免固定2秒检查点与DMA反复重合。 */
+    Acquisition_DebugPPGLive(now);
+#endif
+    if (!started) {
+        started = 1;
+        last_ms = now;
+        last_frames = raw_diag_frame_counter;
+        last_done = raw_diag_tx_done_counter;
+    }
+    if ((uint32_t)(now - last_ms) < 2000U) return;
+    last_ms = now;
+#if ENABLE_RAW_DATA_PACKET
+    uint8_t no_frame = raw_diag_frame_counter == last_frames;
+    uint8_t no_done = raw_diag_tx_done_counter == last_done;
+    last_frames = raw_diag_frame_counter;
+    last_done = raw_diag_tx_done_counter;
+    /* 不抢占 Raw/STATUS DMA，也不终止挂起的发送。 */
+    if ((!no_frame && !no_done) || huart2.gState != HAL_UART_STATE_READY) return;
+    char line[288];
+    snprintf(line, sizeof(line), "[DEBUG-acq] %s ms=%lu tick=%lu drdy=%lu adc_state=%u DRDYpin=%u frame=%lu tx=%lu done=%lu busy=%lu err=%lu uart_err=%lu ppg_empty=%lu\r\n",
+        no_frame ? "NO_FRAME" : "NO_TX_DONE", (unsigned long)now, (unsigned long)raw_diag_sample_counter,
+        (unsigned long)raw_diag_adc_drdy_counter, ADC_1to4Voltage_flag,
+        (unsigned)HAL_GPIO_ReadPin(DRDY_GPIO_Port, DRDY_Pin),
+        (unsigned long)raw_diag_frame_counter, (unsigned long)raw_diag_tx_start_counter,
+        (unsigned long)raw_diag_tx_done_counter, (unsigned long)raw_diag_tx_busy_counter,
+        (unsigned long)raw_diag_tx_error_counter, (unsigned long)huart2.ErrorCode,
+        (unsigned long)raw_diag_ppg_fifo_empty_counter);
+    HAL_UART_Transmit(&huart2, (uint8_t *)line, (uint16_t)strlen(line), 100);
+#endif
 }
 
 // PPG 血氧模式硬件配置 (仅 SpO2 模式编译)
@@ -878,7 +1180,7 @@ static void PPG_Config_Green_Hardcoded(void)
     PPG_WriteOneByte(LED_CONTROL1, MAX30101_MULTI_LED_CTRL1_VAL); /* 0x13 */
     PPG_WriteOneByte(LED_CONTROL2, MAX30101_MULTI_LED_CTRL2_VAL); /* 0x02 */
 
-    /* --- 3. LED 电流: 0x6F/0x3F 加大电流对照组 --- */
+    /* --- 3. 保持已验证的LED电流，采样参数为0x6B/0x3F --- */
     PPG_WriteOneByte(LED3_PA_REG, 0xE0);  /* Green */ //2、4、6、8、A、C、E、FF对应1-8挡
     PPG_WriteOneByte(LED1_PA_REG, 0xC0);  /* Red */
     PPG_WriteOneByte(LED2_PA_REG, 0xC0);  /* IR */
@@ -908,7 +1210,8 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         if ((raw_diag_sample_counter % PPG_SAMPLE_RATE) == 0) {
             raw_diag_status_pending = 1;
         }
-        HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
+        if (mimu_ready)
+            HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOA, SPI1_NSS_Pin, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOA, START_CONV_Pin, GPIO_PIN_SET);
         HAL_GPIO_WritePin(GPIOA, START_CONV_Pin, GPIO_PIN_RESET);
@@ -917,6 +1220,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 
 // GPIO外部中断：读取 ADC 和 MIMU 数据
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
+#if ENABLE_BOARD_CHECK
+    /* Communication checks must never enter the ADC acquisition ISR. */
+    (void)GPIO_Pin;
+    return;
+#endif
     if(GPIO_Pin == DRDY_Pin){
         raw_diag_adc_drdy_counter++;
         HAL_GPIO_WritePin(GPIOA, SPI1_NSS_Pin, GPIO_PIN_RESET);
@@ -974,7 +1282,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin){
         }
 
         // 读取 MIMU 数据
-        if(ADC_1to4Voltage_flag == 4) {
+        if(ADC_1to4Voltage_flag == 4 && mimu_ready) {
             ACC_6BytesRead();
             GYRO_6BytesRead();
         }

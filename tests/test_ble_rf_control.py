@@ -24,6 +24,7 @@ def test_rf_three_cycle_ui_selection_and_saved_settings(tmp_path, monkeypatch):
     path = tmp_path / 'settings.json'
     app = QApplication.instance() or QApplication([])
     panel = FirmwarePanel(lambda: True)
+    panel.purpose.setCurrentIndex(panel.purpose.findData(0))
     panel.rf.setCurrentIndex(panel.rf.findData(0))
     panel.ble.setCurrentIndex(panel.ble.findData(1))
     assert panel.rf.findData(2) >= 0
@@ -49,6 +50,7 @@ def test_rf_three_cycle_ui_selection_and_saved_settings(tmp_path, monkeypatch):
 def test_standard_ui_uses_explicit_power_configuration():
     app = QApplication.instance() or QApplication([])
     panel = FirmwarePanel(lambda: True)
+    panel.purpose.setCurrentIndex(panel.purpose.findData(0))
     panel.rf.setCurrentIndex(panel.rf.findData(0))
     panel.ble.setCurrentIndex(panel.ble.findData(1))
     panel.rf.setCurrentIndex(panel.rf.findData(8))

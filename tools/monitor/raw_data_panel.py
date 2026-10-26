@@ -65,6 +65,7 @@ STATUS_CSV_HEADER = [
     "PcReceivedRaw", "PcExpectedRaw", "PcMissingRaw",
     "PcMissingAfterTxDone", "TxInflight",
     "PcRawTotalCandidates", "PcRawInvalidCandidates", "PcRawInvalidDelta",
+    "MimuState",
 ]
 
 
@@ -216,7 +217,23 @@ def status_packet_to_csv_row(
         snapshot.pc_raw_total_candidates,
         snapshot.pc_raw_invalid_candidates,
         snapshot.pc_raw_invalid_delta,
+        status.mimu_state if status.mimu_state is not None else "",
     ]
+
+
+def mimu_status_text(status: StatusPacket, lang: str = "zh") -> str:
+    if lang == "zh":
+        states = {0: "初始化中", 1: "启动成功", 2: "仍在重试", 3: "后台恢复成功",
+                  4: "未就绪（自动重试关闭）"}
+        state = states.get(status.mimu_state, "未知状态")
+        if status.mimu_state is None:
+            return f"MIMU：旧固件未提供状态 · 错误计数 {status.imu_error_counter}"
+        return f"MIMU：{state} · 初始化失败累计 {status.imu_error_counter} 次"
+    states = {0: "Initializing", 1: "Ready at startup", 2: "Retrying",
+              3: "Recovered in background", 4: "Offline (retry disabled)"}
+    if status.mimu_state is None:
+        return f"MIMU: State unavailable in legacy firmware · Errors {status.imu_error_counter}"
+    return f"MIMU: {states.get(status.mimu_state, 'Unknown state')} · Init failures {status.imu_error_counter}"
 
 
 class _ElidedInfoLabel(QLabel):
@@ -277,6 +294,9 @@ class RawDataPanel(QWidget):
         self._last_expected_count = 0
         self._last_hr_calc_ms: Optional[float] = None
         self._last_status: Optional[StatusPacket] = None
+        self._mimu_status_time: Optional[float] = None
+        self._mimu_connected = False
+        self._mimu_simulating = False
 
         # 信息条最新包缓存 (按帧率更新, 不逐包刷新)
         self._last_pkt: Optional[RawDataPacket] = None
@@ -440,6 +460,10 @@ class RawDataPanel(QWidget):
             rows[row].addWidget(label, 1 if elide else 0)
         self._lbl_calib.hide()
         rows[0].addStretch()
+        self._lbl_mimu = QLabel("MIMU：未连接")
+        self._lbl_mimu.setWordWrap(True)
+        self._lbl_mimu.setStyleSheet(f"color: {COLOR_TEXT_DIM}; background: transparent;")
+        layout.addWidget(self._lbl_mimu)
         return frame
 
     def _make_plot(self, title: str, color: str) -> tuple[pg.PlotWidget, pg.PlotDataItem]:
@@ -520,6 +544,9 @@ class RawDataPanel(QWidget):
 
     def handle_calib_status(self, text: str):
         """处理固件发送的标定状态文本"""
+        # 诊断详情仍在接收日志中，不覆盖标定进度或独立的MIMU状态。
+        if text.startswith(("DEBUG:", "DBG:", "[DEBUG-", "[SYSTEM]", "[ADC]", "[PPG]", "[MIMU]")):
+            return
         self._lbl_calib.setVisible(True)
         self._lbl_calib.setText(text)
         # 根据内容切换颜色
@@ -552,12 +579,42 @@ class RawDataPanel(QWidget):
         """处理固件 1Hz Raw 链路诊断状态帧。"""
         snapshot = self._quality.observe_status(status)
         self._last_status = status
+        self._mimu_status_time = time.monotonic()
+        self._mimu_connected = True
+        self._update_mimu_status()
         self._lbl_diag.setText(status_packet_to_summary(status, snapshot, self._lang))
         if self._is_recording and self._status_csv_writer:
             start = self._recording_start_time or time.monotonic()
             elapsed = time.monotonic() - start
             self._status_csv_writer.writerow(status_packet_to_csv_row(status, snapshot, elapsed))
             self._status_csv_file.flush()
+
+    def handle_connection_changed(self, connected: bool):
+        self._mimu_connected = connected
+        self._last_status = None
+        self._mimu_status_time = None
+        self._update_mimu_status()
+
+    def _update_mimu_status(self):
+        zh = self._lang == "zh"
+        color = COLOR_TEXT_DIM
+        if self._mimu_simulating:
+            text = "MIMU：模拟数据" if zh else "MIMU: Simulated data"
+        elif not self._mimu_connected:
+            text = "MIMU：未连接" if zh else "MIMU: Disconnected"
+        elif self._last_status is None:
+            text = "MIMU：等待设备状态" if zh else "MIMU: Waiting for device status"
+        else:
+            text = mimu_status_text(self._last_status, self._lang)
+            state = self._last_status.mimu_state
+            color = {1: COLOR_GREEN, 2: COLOR_ORANGE, 3: COLOR_GREEN, 4: COLOR_RED}.get(state, COLOR_TEXT_DIM)
+            if self._mimu_status_time is not None and time.monotonic() - self._mimu_status_time > 3.5:
+                text = ("状态已过期，上次 " if zh else "Stale status, last ") + text
+                color = COLOR_ORANGE
+        self._lbl_mimu.setText(text)
+        self._lbl_mimu.setStyleSheet(f"color: {color}; background: transparent;")
+        self._lbl_mimu.setToolTip(text + ("\n这是初始化结果，不代表本次标定成功或持续通信健康；后台恢复使用历史零偏。"
+                                         if zh else "\nInitialization result, not calibration success or continuous link health; recovery uses saved offsets."))
 
     def handle_raw_parse_stats(self, raw_total: int, raw_invalid: int):
         """Record PC-side Raw parser counters for the next STATUS snapshot."""
@@ -653,6 +710,7 @@ class RawDataPanel(QWidget):
 
     def _update_sample_rate(self):
         """1秒定时器: 刷新采样率"""
+        self._update_mimu_status()
         t = TRANSLATIONS[self._lang]
         current_expected = self._quality.expected_count
         self._last_rx_hz = self._sample_count
@@ -813,6 +871,9 @@ class RawDataPanel(QWidget):
         self._packet_count = 0
         self._start_time = time.monotonic()
         self._reset_quality_stats()
+        self._last_status = None
+        self._mimu_status_time = None
+        self._update_mimu_status()
 
         # 停止录制
         if self._is_recording:
@@ -849,6 +910,7 @@ class RawDataPanel(QWidget):
     def _apply_language(self, lang: str):
         """应用语言到所有 UI 元素"""
         self._lang = lang
+        self._update_mimu_status()
         t = TRANSLATIONS[lang]
         self._lbl_mode.setText(f"{t.get('mode', 'Mode')}: --")
         self._lbl_rate.setText(
@@ -882,11 +944,17 @@ class RawDataPanel(QWidget):
     def start_simulation(self):
         """启动 100Hz 模拟数据"""
         self._sim_step = 0
+        self._mimu_simulating = True
+        self._last_status = None
+        self._mimu_status_time = None
+        self._update_mimu_status()
         self._sim_timer.start(10)  # 100Hz
 
     def stop_simulation(self):
         """停止模拟"""
         self._sim_timer.stop()
+        self._mimu_simulating = False
+        self._update_mimu_status()
 
     def _sim_tick(self):
         """生成一个模拟多光谱原始数据包"""

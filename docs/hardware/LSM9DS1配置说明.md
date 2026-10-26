@@ -8,7 +8,7 @@
 
 | 项目 | 说明 |
 |------|------|
-| 通信总线 | SPI2 (SCK: PB13, MISO: PB14, MOSI: PB15) |
+| 通信总线 | SPI2 (SCK: PB10, MISO: PB14, MOSI: PB15，以当前 `spi.c` 为准；PB13是BLE复位) |
 | ACC/GYRO 片选 | CS_A/G = PB7 (低电平有效) |
 | 磁力计片选 | CS_M = PB8 (低电平有效) |
 | SPI 模式 | CPOL=1, CPHA=1 (Mode 3) |
@@ -25,6 +25,8 @@
 ## 2. 本项目实际寄存器配置
 
 ### 2.1 初始化序列 (`MIMU_Init`)
+
+`MIMU_Init()` 返回 `uint8_t`：先要求 A/G 的 `WHO_AM_I=0x68` 且HAL读事务成功，再执行以下配置，最后核对身份、`CTRL_REG8=0x44`、`CTRL_REG1_G=0x68`、`CTRL_REG6_XL=0x77` 的读回结果，全部满足才返回1。MAG不作为A/G初始化的验收门槛。数据采集程序仅在返回1后打印 `MIMU Init OK (AG identity/config verified)` 并进行陀螺仪标定；失败时打印FAIL并跳过标定，避免写入无效零偏。旧版无条件的 `MIMU Init OK` 不能作为芯片正常的证据。
 
 ```
 Step 1: CTRL_REG8 (0x22) = 0x05    // 软复位 + IF_ADD_INC
@@ -191,7 +193,17 @@ typedef struct __attribute__((packed)) {
 
 ### 5.3 开机自动加载
 
-`MIMU_LoadGyroOffset()` 在 `MIMU_Init()` 之后调用, 校验 magic 和 xor 后加载零偏。
+`MIMU_LoadGyroOffset()` 在 `MIMU_Init()` 返回1后调用, 校验 magic 和 xor 后加载零偏；初始化核验失败时不加载或标定。
+
+### 新焊接板持续读到0xFF时
+
+新板检查连续读取三次A/G身份，并同时显示三次HAL状态。`0xFF/0xFF/0xFF`仅说明没有取得期望身份，不直接证明芯片损坏；`SPI=0`只证明STM32完成了传输调用。
+
+按[ST原厂手册](https://www.st.com/resource/en/datasheet/lsm9ds1.pdf)表2、表4、表43及5.2节核实：
+
+1. 先上电测量芯片端VDD、两处VDDIO和GND，并与正常板对照。VDD范围为1.9–3.6V，VDDIO为1.71V至VDD+0.1V；不能用其他器件正常代替MIMU供电检查。
+2. 断电检查PB10↔SPC、PB15↔SDI、PB14↔SDO_A/G、PB7↔CS_A/G及PB8↔CS_M的连通、短路、方向和焊点。不要按旧文档把PB13当成SPI2时钟。
+3. 若有示波器或逻辑分析仪，在传感器端确认：A/G读取时CS_A/G拉低、CS_M保持高，SPI Mode 3发送`0x8F`后取得`0x68`。若信号没有到达芯片，先修通路；供电和输入信号均正常而输出仍异常时，再考虑焊接返修或更换芯片。
 即使标定被拒绝 (std 过高), 也不会清除 Flash 中已有的有效零偏。
 
 ---

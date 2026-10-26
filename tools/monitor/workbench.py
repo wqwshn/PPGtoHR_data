@@ -43,13 +43,13 @@ class Workbench(QMainWindow):
         firmware_scroll.setFrameShape(QScrollArea.NoFrame)
         firmware_scroll.setWidget(self.firmware)
         self.tabs.addTab(firmware_scroll, "固件配置与烧录")
-        self.firmware.busy_changed.connect(lambda busy: self.monitor.setEnabled(not busy))
+        self.firmware.busy_changed.connect(self._update_hardware_controls)
+        self.firmware.check_panel.active_changed.connect(self._update_hardware_controls)
         self.demo_button = QPushButton("开始模拟")
         self.demo_button.setMinimumHeight(28)
         self.demo_button.clicked.connect(self._toggle_simulation)
         self.monitor._btn_disconnect.clicked.connect(lambda: self.demo_button.setText("开始模拟"))
         self.tabs.setCornerWidget(self.demo_button)
-        self.firmware.busy_changed.connect(lambda busy: self.demo_button.setEnabled(not busy))
         if simulate:
             self._toggle_simulation()
         if firmware:
@@ -69,6 +69,11 @@ class Workbench(QMainWindow):
             self.monitor.start_raw_simulation()
             self.demo_button.setText("停止模拟")
 
+    def _update_hardware_controls(self, _active):
+        available = not (self.firmware.busy or self.firmware.check_panel.listening)
+        self.monitor.setEnabled(available)
+        self.demo_button.setEnabled(available)
+
     def _prepare_hardware(self):
         if self.monitor._raw_panel.is_recording:
             QMessageBox.information(self, "正在录制", "请先停止数据录制，再连接目标芯片。")
@@ -80,6 +85,9 @@ class Workbench(QMainWindow):
     def closeEvent(self, event):
         if self.firmware.busy:
             QMessageBox.information(self, "操作进行中", "请等待当前编译或烧录结束后再关闭工作台。")
+            event.ignore()
+            return
+        if not self.firmware.check_panel.stop_listening():
             event.ignore()
             return
         self.controller.cleanup()

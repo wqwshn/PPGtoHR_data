@@ -103,6 +103,18 @@ void Error_Handler(void);
  * ============================================================ */
 
 /* 工作模式选择 */
+#ifndef ENABLE_BOARD_CHECK
+#define ENABLE_BOARD_CHECK 0
+#endif
+
+/* 日常默认稳健启动；编译参数可选择单次检测作对照。 */
+#ifndef ENABLE_ACQUISITION_DEBUG
+#define ENABLE_ACQUISITION_DEBUG 0
+#endif
+#ifndef ENABLE_MIMU_RECOVERY
+#define ENABLE_MIMU_RECOVERY 1
+#endif
+
 #define MODE_HEART_RATE 0
 #define MODE_SPO2       1
 #ifndef CURRENT_WORK_MODE
@@ -197,11 +209,16 @@ void BP_RxIRQ(void);
 
 /* PPG 采样率 (Hz): 50 / 100 / 125
  * 50Hz:  内部 800sps / 16x 硬件平均 = 50sps
- * 100Hz: 内部 400sps / 2x 硬件平均 = 200sps, MCU 100Hz 读取
+ * 100Hz: 内部 200sps / 2x 硬件平均 = 100sps, MCU 100Hz 读取
  * 125Hz: 内部 1000sps / 4x 硬件平均 = 250sps, MCU 125Hz 读取
  */
 #ifndef PPG_SAMPLE_RATE
 #define PPG_SAMPLE_RATE         100
+#endif
+
+#if ENABLE_BOARD_CHECK && ((PPG_DEFAULT_CHANNEL != 0 && PPG_DEFAULT_CHANNEL != 2) || BLE_RF_DISABLED || \
+    BLE_RF_EXPERIMENT || BLE_POWER_EXPERIMENT || BLE_FIXED_MINUS10 || BLE_BATCH5 || BLE_SINGLE25)
+#error "Board check supports PPG2/disabled and excludes BLE experiments"
 #endif
 
 /* ============================================================ */
@@ -210,13 +227,19 @@ void BP_RxIRQ(void);
 #define PACKET_LEN 35
 #define XOR_CHECK_LEN 31  /* 校验区域: ADC(8) + ACC(6) + GYRO(6) + PPG(9) + SEQ(2) = 31 */
 
-/* Raw 链路诊断 STATUS 帧: 69字节, 1Hz, 帧头 0xAA 0xDD */
+/* Raw 链路诊断 STATUS v3 帧: 73字节, 1Hz, 帧头 0xAA 0xDD */
 #define STATUS_HEADER_BYTE_1 0xDD
-#define RAW_DIAG_PROTOCOL_VERSION 2
-#define STATUS_PACKET_LEN 69
-#define STATUS_XOR_CHECK_LEN 65  /* protocol_version(1) + uint32计数器(16*4) */
-#define STATUS_XOR_INDEX 67
-#define STATUS_FOOTER_INDEX 68
+#define RAW_DIAG_PROTOCOL_VERSION 3
+#define STATUS_PACKET_LEN 73
+#define STATUS_XOR_CHECK_LEN 69  /* version(1) + uint32计数器(16*4) + MIMU状态(4) */
+#define STATUS_XOR_INDEX 71
+#define STATUS_FOOTER_INDEX 72
+
+#define MIMU_STATE_INITIALIZING 0
+#define MIMU_STATE_BOOT_READY 1
+#define MIMU_STATE_RETRYING 2
+#define MIMU_STATE_RECOVERED 3
+#define MIMU_STATE_OFFLINE 4
 
 /* 数据段偏移定义 */
 #define GYRO_START_INDEX  16   /* 2(头) + 8(ADC) + 6(ACC) = 16 */

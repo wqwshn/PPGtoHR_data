@@ -112,6 +112,9 @@ ppg_option(BLE_BATCH5 "0|1")
 ppg_option(BLE_SINGLE25 "0|1")
 ppg_option(ENABLE_RAW_DATA_PACKET "0|1")
 ppg_option(CURRENT_WORK_MODE "0|1")
+ppg_option(ENABLE_BOARD_CHECK "0|1")
+ppg_option(ENABLE_MIMU_RECOVERY "0|1")
+ppg_option(ENABLE_ACQUISITION_DEBUG "0|1")
 
 # Enable assembler files preprocessing
 add_compile_options($<$<COMPILE_LANGUAGE:ASM>:-x$<SEMICOLON>assembler-with-cpp>)

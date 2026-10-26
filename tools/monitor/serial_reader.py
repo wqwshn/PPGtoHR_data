@@ -5,7 +5,7 @@ PPG Monitor - 串口读取线程
 支持双协议:
   - 31 字节心率结果包 (0xAA 0xCC) -> hr_packet_received
   - 35 字节多光谱原始传感器包 (0xAA 0xBB) -> raw_packet_received
-  - 69 字节 Raw 链路诊断状态包 (0xAA 0xDD) -> status_packet_received
+  - 69/73 字节 Raw 链路诊断状态包 (0xAA 0xDD) -> status_packet_received
 
 HJ-380 BLE 适配:
   - 连接握手: 自动发送 ST_CON_MAC 绑定指令
@@ -15,6 +15,8 @@ HJ-380 BLE 适配:
 from __future__ import annotations
 
 import re
+import json
+from dataclasses import asdict
 import serial
 import serial.tools.list_ports
 import time
@@ -24,7 +26,7 @@ from PyQt5.QtCore import QThread, pyqtSignal
 from protocol import (
     HEADER_BYTE_0, HEADER_BYTE_1, PACKET_LEN,
     RAW_HEADER_BYTE_1, RAW_PACKET_LEN,
-    STATUS_HEADER_BYTE_1, STATUS_PACKET_LEN,
+    STATUS_HEADER_BYTE_1, STATUS_PACKET_LEN, STATUS_PACKET_LENGTHS,
     parse_hr_packet, HRPacket,
     parse_raw_packet, RawDataPacket,
     parse_status_packet, StatusPacket,
@@ -68,8 +70,10 @@ class SerialReader(QThread):
     connection_changed = pyqtSignal(bool)
     # 信号: HJ-380 MAC 配置结果 (mac, success)
     mac_configured = pyqtSignal(str, bool)
+    log_received = pyqtSignal(str)
 
-    def __init__(self, port: str, baudrate: int = 115200, parent=None, *, bind_mac: bool = True):
+    def __init__(self, port: str, baudrate: int = 115200, parent=None, *, bind_mac: bool = True,
+                 session_log=None):
         super().__init__(parent)
         self._port = port
         self._baudrate = baudrate
@@ -82,6 +86,39 @@ class SerialReader(QThread):
         # HJ-380 握手状态
         self._handshake_deadline = 0.0
         self._mac_configured = False
+        self._session_log = session_log
+
+    def _log_event(self, name: str, detail: str):
+        if self._session_log is not None:
+            try:
+                self.log_received.emit(self._session_log.event(name, detail))
+            except OSError as exc:
+                self._disable_log(exc)
+
+    def _disable_log(self, error: OSError):
+        session, self._session_log = self._session_log, None
+        if session is not None:
+            try:
+                session.close()
+            except OSError:
+                pass
+        self.error_occurred.emit(f"接收日志写入失败，后续日志未保存：{error}")
+
+    def _device_text(self, text: str):
+        self._log_event("DEVICE", text)
+        self.calib_status_received.emit(text)
+
+    def _close_log(self):
+        if self._session_log is not None:
+            session, self._session_log = self._session_log, None
+            try:
+                try:
+                    line = session.event("PARSER", f"raw_candidates={self._raw_total} raw_invalid={self._raw_invalid}")
+                    self.log_received.emit(line)
+                finally:
+                    session.close()
+            except OSError as exc:
+                self.error_occurred.emit(f"关闭接收日志失败：{exc}")
 
     # ── HJ-380 握手与 AT 命令 ─────────────────────────────
 
@@ -89,6 +126,7 @@ class SerialReader(QThread):
         """向 HJ-380 发送 AT 命令, 返回是否发送成功"""
         try:
             if self._serial and self._serial.is_open:
+                self._log_event("TX_COMMAND", cmd)
                 self._serial.write(cmd.encode("ascii"))
                 self._serial.flush()
                 return True
@@ -162,7 +200,7 @@ class SerialReader(QThread):
         try:
             line = bytes(prefix_buf).decode("ascii", errors="ignore").strip()
             if line:
-                self.calib_status_received.emit(line)
+                self._device_text(line)
         except Exception:
             pass
         prefix_buf.clear()
@@ -187,6 +225,8 @@ class SerialReader(QThread):
         else:
             return
 
+        self._log_event("AT_RESPONSE", text)
+
         if inner.startswith(HJ380_RSP_CON_MAC_OK):
             mac = inner[len(HJ380_RSP_CON_MAC_OK):]
             if len(mac) == 12:
@@ -198,7 +238,7 @@ class SerialReader(QThread):
             else:
                 self.mac_configured.emit(BLE_CUSTOM_MAC, False)
         else:
-            self.calib_status_received.emit(text)
+            self._device_text(text)
 
     # ── 主循环 ────────────────────────────────────────────
 
@@ -217,8 +257,11 @@ class SerialReader(QThread):
             self._running = True
             self._raw_total = 0
             self._raw_invalid = 0
+            self._log_event("OPEN", f"port={self._port} bind_mac={self._bind_mac}")
             self.connection_changed.emit(True)
         except serial.SerialException as e:
+            self._log_event("ERROR", str(e))
+            self._close_log()
             self.error_occurred.emit(f"Failed to open {self._port}: {e}")
             self.connection_changed.emit(False)
             return
@@ -260,6 +303,12 @@ class SerialReader(QThread):
                         self.mac_configured.emit(BLE_CUSTOM_MAC, False)
                     continue
 
+                if self._session_log is not None:
+                    try:
+                        self._session_log.receive(raw)
+                    except OSError as exc:
+                        self._disable_log(exc)
+
                 for byte in raw:
                     # ── AT 响应收集 (进行中) ──
                     if len(at_buf) > 0:
@@ -285,7 +334,7 @@ class SerialReader(QThread):
                             at_buf = bytearray([byte])
                             continue
 
-                        if byte == HJ380_PREFIX_FROM[0]:  # 'F' -> From 前缀起始
+                        if byte == HJ380_PREFIX_FROM[0] and not text_buf:  # 行中 FAIL/FIFO 属于设备文本
                             prefix_buf = bytearray([byte])
                             continue
 
@@ -299,7 +348,7 @@ class SerialReader(QThread):
                             if byte == 0x0A:
                                 line = text_buf.decode("ascii", errors="ignore").strip()
                                 if line:
-                                    self.calib_status_received.emit(line)
+                                    self._device_text(line)
                                 text_buf.clear()
                             elif byte != 0x0D:
                                 if len(text_buf) < 256:
@@ -317,7 +366,7 @@ class SerialReader(QThread):
                             state = 2
                         elif byte == STATUS_HEADER_BYTE_1:  # 0xDD -> Raw链路诊断状态包
                             buf.append(byte)
-                            expected_len = STATUS_PACKET_LEN  # 69
+                            expected_len = STATUS_PACKET_LEN  # 收到版本字节后确定长度
                             state = 2
                         elif byte == RF_HEADER:
                             buf.append(byte)
@@ -334,6 +383,12 @@ class SerialReader(QThread):
                             state = 0
                     elif state == 2:
                         buf.append(byte)
+                        if buf[1] == STATUS_HEADER_BYTE_1 and len(buf) == 3:
+                            expected_len = STATUS_PACKET_LENGTHS.get(byte, 0)
+                            if not expected_len:
+                                state = 0
+                                buf.clear()
+                                continue
                         if len(buf) == expected_len:
                             # 收集满一帧, 按类型解析
                             if buf[1] == POWER_DIAG_HEADER:
@@ -358,6 +413,7 @@ class SerialReader(QThread):
                             else:
                                 status = parse_status_packet(bytes(buf))
                                 if status is not None:
+                                    self._log_event("STATUS", json.dumps(asdict(status), ensure_ascii=False))
                                     self.raw_parse_stats_received.emit(
                                         self._raw_total,
                                         self._raw_invalid,
@@ -366,15 +422,29 @@ class SerialReader(QThread):
                             # 重置状态机
                             state = 0
                             buf = bytearray()
-        except serial.SerialException as e:
+        except (serial.SerialException, OSError) as e:
             if self._running:
-                self.error_occurred.emit(f"Serial error: {e}")
+                self._log_event("ERROR", str(e))
+                self.error_occurred.emit(f"Serial/log error: {e}")
         finally:
             # 握手超时最终检测
             if not self._mac_configured:
                 self.mac_configured.emit(BLE_CUSTOM_MAC, False)
-            if self._serial and self._serial.is_open:
-                self._serial.close()
+            try:
+                if self._serial and self._serial.is_open:
+                    self._serial.close()
+            except (serial.SerialException, OSError) as exc:
+                self._log_event("CLOSE_ERROR", str(exc))
+            try:
+                if text_buf:
+                    self._log_event("DEVICE_PARTIAL", text_buf.decode("ascii", errors="replace"))
+                if prefix_buf:
+                    self._log_event("PREFIX_PARTIAL", prefix_buf.decode("ascii", errors="replace"))
+                if at_buf:
+                    self._log_event("AT_PARTIAL", at_buf.decode("ascii", errors="replace"))
+                self._log_event("DISCONNECT", f"port={self._port}")
+            finally:
+                self._close_log()
             self.connection_changed.emit(False)
 
     def stop(self):

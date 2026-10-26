@@ -145,6 +145,7 @@ def test_dual_capture_launcher_and_ui_configuration(monkeypatch):
     import firmware_panel
     app = QApplication.instance() or QApplication([])
     panel = firmware_panel.FirmwarePanel(lambda: True)
+    panel.purpose.setCurrentIndex(panel.purpose.findData(0))
     panel.rf.setCurrentIndex(panel.rf.findData(8))
     assert not panel.ble.isEnabled() and panel.settings().ble_init == 0
     assert '-DBLE_SINGLE25=1' in panel.settings().cmake_args()

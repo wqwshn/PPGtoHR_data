@@ -32,7 +32,7 @@ void ACC_6BytesRead(void);  // 加速度计多字节读取
 void GYRO_6BytesRead(void); // 陀螺仪多字节读取
 void MAG_6BytesRead(void);  // 磁力计多字节读取
 
-void MIMU_Init(void);          // MIMU 初始化
+uint8_t MIMU_Init(void);       // A/G身份与关键配置读回通过才返回1；MAG不作为门槛
 void MIMU_LoadGyroOffset(void); // 从 Flash 加载陀螺仪零偏
 void MIMU_GyroCalibrate(void); // 陀螺仪零偏标定 (暖机+800样本+std校验+Flash存储)
 uint8_t MIMU_check(void);   // MIMU 连接检查

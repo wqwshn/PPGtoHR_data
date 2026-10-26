@@ -8,6 +8,8 @@ extern uint8_t ACC_XYZ[];
 extern uint8_t GYRO_XYZ[];
 extern uint8_t MAG_XYZ[];
 
+#define MIMU_SPI_TIMEOUT_MS 10U
+
 /* ── SPI 单字节写寄存器 ── */
 void ACC_GYRO_Write(uint8_t RegAddress, uint8_t txData){
 	uint8_t spiTxData[2] = {0};
@@ -18,13 +20,13 @@ void ACC_GYRO_Write(uint8_t RegAddress, uint8_t txData){
 	spiTxData[0] = RegAddress & 0x7F;  // bit7=0: 写操作
 	spiTxData[1] = txData;
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, MIMU_SPI_TIMEOUT_MS);
 	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);    // 释放CS
 }
 
 
 /* ── SPI 单字节读寄存器 ── */
-uint8_t ACC_GYRO_Read(uint8_t RegAddress){
+static HAL_StatusTypeDef ACC_GYRO_ReadChecked(uint8_t RegAddress, uint8_t *value){
 	uint8_t spiTxData[2] = {0};
 	uint8_t spiRxData[2] = {0};
 	spiTxData[0] = 0x80 | RegAddress;  // bit7=1: 读操作
@@ -32,12 +34,17 @@ uint8_t ACC_GYRO_Read(uint8_t RegAddress){
 	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_RESET);
 	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
+	HAL_StatusTypeDef status = HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, MIMU_SPI_TIMEOUT_MS);
 	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
-
-	return spiRxData[1];
+	*value = spiRxData[1];
+	return status;
 }
 
+uint8_t ACC_GYRO_Read(uint8_t RegAddress){
+	uint8_t value = 0;
+	(void)ACC_GYRO_ReadChecked(RegAddress, &value);
+	return value;
+}
 
 /* ── MAG 写寄存器 ── */
 void MAG_Write(uint8_t RegAddress, uint8_t txData){
@@ -49,7 +56,7 @@ void MAG_Write(uint8_t RegAddress, uint8_t txData){
 	spiTxData[0] = RegAddress & 0x7F;
 	spiTxData[1] = txData;
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, MIMU_SPI_TIMEOUT_MS);
 	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
 }
 
@@ -63,7 +70,7 @@ uint8_t MAG_Read(uint8_t RegAddress){
 	HAL_GPIO_WritePin(CS_A_G_GPIO_Port, CS_A_G_Pin, GPIO_PIN_SET);
 	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_RESET);
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, 0xffff);
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 2, MIMU_SPI_TIMEOUT_MS);
 	HAL_GPIO_WritePin(CS_M_GPIO_Port, CS_M_Pin, GPIO_PIN_SET);
 
 	return spiRxData[1];
@@ -79,7 +86,7 @@ void ACC_6BytesRead(void){
 	uint8_t spiRxData[7] = {0};
 	spiTxData[0] = 0x80 | 0x28;  // 读 OUT_X_L_XL, IF_ADD_INC 自动递增
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, MIMU_SPI_TIMEOUT_MS);
 
 	for(uint8_t i = 0; i < 6; i++){
 		ACC_XYZ[i] = spiRxData[i+1];
@@ -98,7 +105,7 @@ void GYRO_6BytesRead(void){
 	uint8_t spiRxData[7] = {0};
 	spiTxData[0] = 0x80 | 0x18;  // 读 OUT_X_L_G, IF_ADD_INC 自动递增
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, MIMU_SPI_TIMEOUT_MS);
 
 	for(uint8_t i = 0; i < 6; i++){
 		GYRO_XYZ[i] = spiRxData[i+1];
@@ -117,7 +124,7 @@ void MAG_6BytesRead(void){
 	uint8_t spiRxData[7] = {0};
 	spiTxData[0] = 0xC0 | 0x28;  // 读 OUT_X_L_M, 地址递增
 
-	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, 0xffff);
+	HAL_SPI_TransmitReceive(&hspi2, spiTxData, spiRxData, 7, MIMU_SPI_TIMEOUT_MS);
 
 	for(uint8_t i = 0; i < 6; i++){
 		MAG_XYZ[i] = spiRxData[i+1];
@@ -138,7 +145,10 @@ void MAG_6BytesRead(void){
  *   5. 配置加速度计: 119Hz, ±4g, 高分辨率, 数字滤波
  *   6. 配置磁力计
  */
-void MIMU_Init(void){
+uint8_t MIMU_Init(void){
+	uint8_t identity = 0;
+	if (ACC_GYRO_ReadChecked(WHO_AM_I, &identity) != HAL_OK || identity != 0x68)
+		return 0;
 	/* Step-1: 软复位 + IF_ADD_INC, 等待寄存器重装完成 */
 	ACC_GYRO_Write(CTRL_REG8, 0x05);   // SW_RESET=1 + IF_ADD_INC=1
 	HAL_Delay(20);
@@ -170,6 +180,16 @@ void MIMU_Init(void){
 	MAG_Write(CTRL_REG3_M, 0x80);  // 禁用I2C, SPI读写, 连续转换模式
 	MAG_Write(CTRL_REG4_M, 0x0C);  // Z轴UHP模式
 	MAG_Write(CTRL_REG5_M, 0x00);  // 连续转换模式
+
+	/* MAG is independent of the A/G acceptance criterion. */
+	static const uint8_t registers[] = {WHO_AM_I, CTRL_REG8, CTRL_REG1_G, CTRL_REG6_XL};
+	static const uint8_t expected[] = {0x68, 0x44, 0x68, 0x77};
+	for (unsigned i = 0; i < sizeof(registers); ++i) {
+		uint8_t value = 0;
+		if (ACC_GYRO_ReadChecked(registers[i], &value) != HAL_OK || value != expected[i])
+			return 0;
+	}
+	return 1;
 }
 
 

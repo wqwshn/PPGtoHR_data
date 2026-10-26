@@ -84,12 +84,13 @@ PPG_AVG_SCALE = 1 << PPG_AVG_FRAC_BITS
 
 # 1Hz Raw 链路诊断 STATUS 帧常量 (Phase A)
 STATUS_HEADER_BYTE_1 = 0xDD
-RAW_DIAG_PROTOCOL_VERSION = 2
-STATUS_PACKET_LEN = 69
+RAW_DIAG_PROTOCOL_VERSION = 3
+STATUS_PACKET_LEN = 73
+STATUS_PACKET_LENGTHS = {1: 69, 2: 69, 3: 73}
 STATUS_XOR_START = 2
-STATUS_XOR_END = 66
-STATUS_XOR_POS = 67
-STATUS_FOOTER_POS = 68
+STATUS_XOR_END = 70
+STATUS_XOR_POS = 71
+STATUS_FOOTER_POS = 72
 
 
 @dataclass
@@ -224,6 +225,7 @@ class StatusPacket:
     ppg_fifo_nonempty_counter: int
     ppg_fifo_single_sample_counter: int
     ppg_fifo_multi_sample_counter: int
+    mimu_state: Optional[int] = None  # v3: 0初始化、1启动成功、2重试、3后台恢复、4离线
 
 
 def parse_raw_packet(data: bytes) -> Optional[RawDataPacket]:
@@ -302,26 +304,26 @@ def _read_u32_be(data: bytes, offset: int) -> int:
 
 def parse_status_packet(data: bytes) -> Optional[StatusPacket]:
     """
-    解析 69 字节 Raw 链路诊断 STATUS 包.
+    解析 STATUS v1/v2（69 字节）或 v3（73 字节）.
 
     帧格式:
       0-1   0xAA 0xDD
       2     protocol_version
       3-66  16 个 uint32 BE 诊断计数器
-      67    XOR(bytes[2..66])
-      68    0xCC
+      v3: 67-70 MIMU 状态 uint32 BE，71 XOR(bytes[2..70])，72 0xCC
+      v1/v2: 67 XOR(bytes[2..66])，68 0xCC（无 MIMU 状态）
     """
-    if len(data) != STATUS_PACKET_LEN:
+    if len(data) < 3 or len(data) != STATUS_PACKET_LENGTHS.get(data[2]):
         return None
     if data[0] != RAW_HEADER_BYTE_0 or data[1] != STATUS_HEADER_BYTE_1:
         return None
-    if data[STATUS_FOOTER_POS] != RAW_FOOTER_BYTE:
+    if data[-1] != RAW_FOOTER_BYTE:
         return None
 
     xor_val = 0
-    for i in range(STATUS_XOR_START, STATUS_XOR_END + 1):
+    for i in range(STATUS_XOR_START, len(data) - 2):
         xor_val ^= data[i]
-    if xor_val != data[STATUS_XOR_POS]:
+    if xor_val != data[-2]:
         return None
 
     offset = 3
@@ -348,4 +350,5 @@ def parse_status_packet(data: bytes) -> Optional[StatusPacket]:
         ppg_fifo_nonempty_counter=fields[13],
         ppg_fifo_single_sample_counter=fields[14],
         ppg_fifo_multi_sample_counter=fields[15],
+        mimu_state=_read_u32_be(data, 67) if data[2] == 3 else None,
     )

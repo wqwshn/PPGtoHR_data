@@ -47,10 +47,11 @@ def make_raw_packet(
 
 
 def make_status_packet(**values: int) -> bytes:
-    data = bytearray(protocol.STATUS_PACKET_LEN)
+    version = values.get("protocol_version", protocol.RAW_DIAG_PROTOCOL_VERSION)
+    data = bytearray(protocol.STATUS_PACKET_LENGTHS[version])
     data[0] = protocol.RAW_HEADER_BYTE_0
     data[1] = protocol.STATUS_HEADER_BYTE_1
-    data[2] = protocol.RAW_DIAG_PROTOCOL_VERSION
+    data[2] = version
 
     fields = [
         values.get("mcu_time_ms", 1234),
@@ -70,16 +71,18 @@ def make_status_packet(**values: int) -> bytes:
         values.get("ppg_fifo_single_sample_counter", 10),
         values.get("ppg_fifo_multi_sample_counter", 80),
     ]
+    if version == 3:
+        fields.append(values.get("mimu_state", 1))
     pos = 3
     for value in fields:
         data[pos:pos + 4] = int(value).to_bytes(4, "big")
         pos += 4
 
     xor_val = 0
-    for idx in range(protocol.STATUS_XOR_START, protocol.STATUS_XOR_END + 1):
+    for idx in range(protocol.STATUS_XOR_START, len(data) - 2):
         xor_val ^= data[idx]
-    data[protocol.STATUS_XOR_POS] = xor_val
-    data[protocol.STATUS_FOOTER_POS] = protocol.RAW_FOOTER_BYTE
+    data[-2] = xor_val
+    data[-1] = protocol.RAW_FOOTER_BYTE
     return bytes(data)
 
 
@@ -153,9 +156,9 @@ def test_raw_quality_stats_rejects_small_backward_sequence_as_out_of_order():
 
 def test_status_packet_parses_diagnostic_counters():
     assert protocol.STATUS_HEADER_BYTE_1 == 0xDD
-    assert protocol.RAW_DIAG_PROTOCOL_VERSION == 2
-    assert protocol.STATUS_PACKET_LEN == 69
-    assert protocol.STATUS_XOR_POS == 67
+    assert protocol.RAW_DIAG_PROTOCOL_VERSION == 3
+    assert protocol.STATUS_PACKET_LEN == 73
+    assert protocol.STATUS_XOR_POS == 71
 
     pkt = protocol.parse_status_packet(make_status_packet(tx_busy_counter=7))
 
@@ -292,8 +295,8 @@ def test_firmware_raw_packet_declares_sequence_extended_layout():
 
 def test_firmware_declares_phase_a_status_diagnostics():
     assert "#define STATUS_HEADER_BYTE_1 0xDD" in MAIN_H
-    assert "#define STATUS_PACKET_LEN 69" in MAIN_H
-    assert "#define RAW_DIAG_PROTOCOL_VERSION 2" in MAIN_H
+    assert "#define STATUS_PACKET_LEN 73" in MAIN_H
+    assert "#define RAW_DIAG_PROTOCOL_VERSION 3" in MAIN_H
     assert "BuildStatusFrame" in MAIN_C
     assert "HAL_UART_TxCpltCallback" in MAIN_C
     assert "raw_diag_tx_busy_counter++" in MAIN_C

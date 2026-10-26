@@ -316,12 +316,12 @@ def test_status_csv_row_exports_diagnostic_snapshot():
         100,
         99,
     ]
-    assert raw_data_panel.STATUS_CSV_HEADER[-3:] == [
+    assert raw_data_panel.STATUS_CSV_HEADER[-4:-1] == [
         "PcRawTotalCandidates",
         "PcRawInvalidCandidates",
         "PcRawInvalidDelta",
     ]
-    assert raw_data_panel.status_packet_to_csv_row(status, snapshot, 1.25)[-3:] == [
+    assert raw_data_panel.status_packet_to_csv_row(status, snapshot, 1.25)[-4:-1] == [
         120,
         3,
         3,

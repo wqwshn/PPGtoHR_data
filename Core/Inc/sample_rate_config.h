@@ -9,10 +9,10 @@
  *
  * 各模式 MAX30101 内部采样策略:
  *   50Hz  -> 内部 800sps / 16x 平均 = 50sps 有效输出
- *   100Hz -> 内部 400sps / 2x 平均 = 200sps 有效输出 (MCU 100Hz 读取)
+ *   100Hz -> 内部 200sps / 2x 平均 = 100sps 有效输出
  *   125Hz -> 内部 1000sps / 4x 平均 = 250sps 有效输出 (MCU 125Hz 读取)
  *
- * 约束: 三光路 100Hz 当前部署 411us (18-bit), 内部速率 400sps, 时序余量 50.7%.
+ * 约束: 三光路 100Hz 当前部署 411us (18-bit), 内部速率 200sps；时隙按完整 channel-channel timing 计算。
  ******************************************************************************
  */
 
@@ -63,10 +63,10 @@
 #define MAX30101_SPO2_CONFIG_VAL    0x73
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* ADC=16384nA(011) | SR=400sps(011) | PW=411us(11) = 0x6F
- * 三光路约束: 3 LEDs x 411us = 1233us < 2500us (1/400sps), 余量 50.7%
- * 18-bit/411us 保持高单样本 SNR, 400sps 确保三路时序安全 */
-#define MAX30101_SPO2_CONFIG_VAL    0x6F
+/* ADC=16384nA(11) | SR=200sps(010) | PW=411us(11) = 0x6B
+ * 3 x 1107us 完整时隙 < 5000us；2x平均得到100sps。
+ * 与2026-10-21实板读回一致，避免依赖芯片将0x6F自动下调。 */
+#define MAX30101_SPO2_CONFIG_VAL    0x6B
 
 #elif (PPG_SAMPLE_RATE == 125)
 /* ADC=16384nA(011) | SR=1000sps(101) | PW=411us(11) = 0x77 */
@@ -99,7 +99,7 @@
 #define PPG_RATE_STR    "50Hz (800/16x, Multi-LED G+R+IR)"
 
 #elif (PPG_SAMPLE_RATE == 100)
-#define PPG_RATE_STR    "100Hz (400/2x, Multi-LED G+R+IR, 18-bit)"
+#define PPG_RATE_STR    "100Hz (200/2x, Multi-LED G+R+IR, 18-bit)"
 
 #elif (PPG_SAMPLE_RATE == 125)
 #define PPG_RATE_STR    "125Hz (1000/4x)"
@@ -112,9 +112,9 @@
  * CTRL1: [6:4]SLOT2=001 | [2:0]SLOT1=011 = 0x13
  * CTRL2: [6:4]SLOT4=000 | [2:0]SLOT3=010 = 0x02
  *
- * 时隙约束: 3 x LED_PW < 1/内部采样率
- *   50Hz:  3 x 411us = 1233us < 1250us (1/800sps)  满足但裕量窄
- *   100Hz: 3 x 411us = 1233us < 2500us (1/400sps)  余量 50.7%, 安全
+ * 时隙约束须含转换间隔，不能只累加LED发光时间。
+ *   50Hz:  历史分支，本轮未进行有效输出速率验收。
+ *   100Hz: 3 x 1107us = 3321us < 5000us (1/200sps)。
  *   125Hz: 3 x 411us = 1233us > 1000us (1/1000sps) 不满足, 需降 PW 待验证
  * ============================================================ */
 #if (PPG_SAMPLE_RATE == 50)
@@ -127,7 +127,7 @@
 #define MAX30101_PPG_VALID_MASK        0x03FFFFU
 
 #elif (PPG_SAMPLE_RATE == 100)
-/* PW=411us(18-bit), ADC=16384nA, SR=400sps, SMP_AVE=2x */
+/* PW=411us(18-bit), ADC=16384nA, SR=200sps, SMP_AVE=2x */
 #define MAX30101_MULTI_LED_CTRL1_VAL   0x13U
 #define MAX30101_MULTI_LED_CTRL2_VAL   0x02U
 #define MAX30101_PPG_CHANNELS          3U

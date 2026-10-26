@@ -79,9 +79,42 @@ def test_no_ppg_option_is_saved_and_disables_light_mode(tmp_path):
     assert "-DPPG_DEFAULT_CHANNEL=0" in settings.cmake_args()
     app = QApplication.instance() or QApplication([])
     panel = FirmwarePanel(lambda: True)
+    panel.purpose.setCurrentIndex(panel.purpose.findData(0))
     panel.channel.setCurrentIndex(panel.channel.findData(0))
     assert not panel.mode.isEnabled()
     assert "双 IIC 关闭" in panel.summary.text()
     panel.channel.setCurrentIndex(panel.channel.findData(2))
     assert panel.mode.isEnabled()
+    panel.close()
+
+
+def test_mimu_recovery_defaults_on_and_explicit_old_settings_remain_compatible(tmp_path):
+    path = tmp_path / "firmware.json"
+    path.write_text('{"channel": 2, "ble_init": 0}', encoding="utf-8")
+    settings = FirmwareSettings.load(path)
+    assert settings.mimu_recovery == 1
+    assert "-DENABLE_MIMU_RECOVERY=1" in settings.cmake_args()
+    with pytest.raises(ValueError):
+        FirmwareSettings(mimu_recovery=2)
+
+
+def test_mimu_variant_ui_selection_persists_and_controls_build(tmp_path, monkeypatch):
+    monkeypatch.setattr(FirmwareSettings, "load", classmethod(lambda cls: cls()))
+    app = QApplication.instance() or QApplication([])
+    panel = FirmwarePanel(lambda: True)
+    assert panel.mimu.currentData() == 1
+    panel.mimu.setCurrentIndex(panel.mimu.findData(1))
+    chosen = panel.settings()
+    assert chosen.mimu_recovery == 1
+    assert "-DENABLE_MIMU_RECOVERY=1" in chosen.cmake_args()
+    assert "延时重试与后台恢复" in panel.summary.text()
+    path = tmp_path / "firmware.json"
+    chosen.save(path)
+    assert json.loads(path.read_text(encoding="utf-8"))["mimu_recovery"] == 1
+    panel.purpose.setCurrentIndex(panel.purpose.findData(1))
+    assert panel.mimu.isHidden()
+    assert panel.settings().mimu_recovery == 0
+    assert "-DENABLE_MIMU_RECOVERY=0" in panel.settings().cmake_args()
+    panel.purpose.setCurrentIndex(panel.purpose.findData(0))
+    assert panel.settings().mimu_recovery == 1
     panel.close()

@@ -35,8 +35,17 @@ class AppController:
             self._win.show_error("No valid port selected")
             return
 
+        from debug_logging import DebugSessionLog
+        try:
+            session = DebugSessionLog(port, {"link": "wireless" if self._win._bind_mac else "wired",
+                                            "auto_log": True}, kind="capture", raw_text=False)
+        except (OSError, ValueError) as exc:
+            self._win.show_error(f"无法创建接收日志，尚未打开串口：{exc}")
+            return
+        self._win.set_capture_log(session.path)
         self._win._raw_panel._rf_last = None
-        self._reader = SerialReader(port, baudrate=115200, bind_mac=self._win._bind_mac)
+        self._reader = SerialReader(port, baudrate=115200, bind_mac=self._win._bind_mac, session_log=session)
+        self._reader.log_received.connect(self._win.append_capture_log)
         # 双协议信号连接
         self._reader.raw_packet_received.connect(self._win._raw_panel.handle_raw_data)
         self._reader.raw_parse_stats_received.connect(
@@ -47,6 +56,7 @@ class AppController:
         self._reader.calib_status_received.connect(self._win._raw_panel.handle_calib_status)
         self._reader.error_occurred.connect(self._on_error)
         self._reader.connection_changed.connect(self._win.set_connected)
+        self._reader.connection_changed.connect(self._win._raw_panel.handle_connection_changed)
         self._reader.mac_configured.connect(self._win.on_mac_configured)
         self._reader.start()
 
@@ -56,6 +66,7 @@ class AppController:
             self._reader = None
         self._win.stop_simulations()
         self._win.set_connected(False)
+        self._win._raw_panel.handle_connection_changed(False)
 
     def _on_error(self, msg: str):
         self._win.show_error(msg)

@@ -63,7 +63,7 @@ void MX_GPIO_Init(void)
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, CS_A_G_Pin, GPIO_PIN_RESET);
   /* Set output latch before enabling PB13 output: no deliberate release pulse. */
-#if BLE_RF_DISABLED
+#if BLE_RF_DISABLED || ENABLE_BOARD_CHECK
   HAL_GPIO_WritePin(BLE_RST_GPIO_Port, BLE_RST_Pin, GPIO_PIN_SET);
 #else
   HAL_GPIO_WritePin(BLE_RST_GPIO_Port, BLE_RST_Pin, GPIO_PIN_RESET);

@@ -42,6 +42,32 @@ def test_kaiji_metadata_builds_algorithm_compatible_output_paths(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("label", "token", "expected_filename"),
+    [
+        ("温漂测试", "wenpiao", "wenpiao1_LYX_0710.csv"),
+        (
+            "接近度/接触压力测试（上到下：接触压力→接近度）",
+            "PnP_down",
+            "PnP_down1_LYX_0710.csv",
+        ),
+        (
+            "接近度/接触压力测试（下到上：接近度→接触压力）",
+            "PnP_up",
+            "PnP_up1_LYX_0710.csv",
+        ),
+    ],
+)
+def test_new_scenarios_are_selectable_and_used_in_recording_names(
+    tmp_path, label, token, expected_filename
+):
+    assert (label, token) in SCENARIO_OPTIONS
+
+    paths = build_recording_paths(_metadata(tmp_path, scenario_token=token))
+
+    assert paths.raw_path.name == expected_filename
+
+
+@pytest.mark.parametrize(
     ("subject", "trial"),
     [
         ("", 1),

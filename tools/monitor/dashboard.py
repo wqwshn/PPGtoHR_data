@@ -28,7 +28,7 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QPushButton, QProgressBar, QStatusBar,
     QFrame, QFileDialog, QStackedWidget, QButtonGroup,
     QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QLineEdit,
-    QMessageBox, QSpinBox, QSizePolicy,
+    QMessageBox, QSpinBox, QSizePolicy, QPlainTextEdit,
 )
 import pyqtgraph as pg
 
@@ -531,9 +531,37 @@ class MonitorWindow(QMainWindow):
         self.setStatusBar(self._status_bar)
         self._status_label = QLabel(TRANSLATIONS[self._lang]["disconnected"])
         self._status_bar.addPermanentWidget(self._status_label, 1)
+        self._init_capture_log()
 
         self.setStyleSheet(DARK_QSS)
         self._update_marker_button()
+
+    def _init_capture_log(self):
+        from debug_logging import LogTools
+        self._capture_log_dialog = QDialog(self)
+        self._capture_log_dialog.setWindowTitle("串口接收日志（连接后自动保存）")
+        self._capture_log_dialog.resize(900, 500)
+        layout = QVBoxLayout(self._capture_log_dialog)
+        self._capture_log_display = QPlainTextEdit()
+        self._capture_log_display.setReadOnly(True)
+        self._capture_log_display.setMaximumBlockCount(2000)
+        layout.addWidget(self._capture_log_display)
+        self._capture_log_tools = LogTools(self._capture_log_display)
+        layout.addWidget(self._capture_log_tools)
+        self._btn_capture_log = QPushButton("接收日志")
+        self._btn_capture_log.clicked.connect(self._capture_log_dialog.show)
+        self._status_bar.addPermanentWidget(self._btn_capture_log)
+
+    def set_capture_log(self, path: Path):
+        self._capture_log_tools.set_path(path)
+        try:
+            self._capture_log_display.setPlainText(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            self._capture_log_display.setPlainText(f"读取日志失败：{exc}")
+
+    def append_capture_log(self, text: str):
+        from debug_logging import append_log_text
+        append_log_text(self._capture_log_display, text)
 
     def _create_raw_panel(self):
         """延迟导入避免循环依赖"""
