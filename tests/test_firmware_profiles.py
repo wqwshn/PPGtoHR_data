@@ -8,9 +8,56 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools/monitor"))
 
 import pytest
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QPalette
+from PyQt5.QtCore import QPoint
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout
+from dashboard import DARK_QSS
 from firmware_build import BUILD, FirmwareSettings, flash_args
 from firmware_panel import FirmwarePanel
+
+
+@pytest.mark.parametrize("style", ["Windows", "Fusion"])
+def test_firmware_dropdown_popup_has_opaque_dark_background(monkeypatch, style):
+    monkeypatch.setattr(FirmwareSettings, "load", classmethod(lambda cls: cls()))
+    app = QApplication.instance() or QApplication([])
+    previous_style = app.style().objectName()
+    app.setStyle(style)
+    host = QWidget()
+    host.setStyleSheet(DARK_QSS)
+    panel = FirmwarePanel(lambda: True)
+    QVBoxLayout(host).addWidget(panel)
+    panel.advanced_toggle.setChecked(True)
+    host.resize(1100, 1000)
+    host.show()
+    app.processEvents()
+    try:
+        for combo in (panel.purpose, panel.channel, panel.mode, panel.ble,
+                      panel.mimu, panel.rf, panel.speed):
+            combo.showPopup()
+            app.processEvents()
+            view = combo.view()
+            # Sample blank space within an unselected row in the composited popup.
+            # A transparent viewport renders black alone but exposes a white popup.
+            row = 1 if combo.currentIndex() == 0 else 0
+            rect = view.visualRect(combo.model().index(row, 0))
+            point = view.viewport().mapTo(view.window(),
+                QPoint(view.viewport().width() - 12, rect.center().y()))
+            color = view.window().grab().toImage().pixelColor(point)
+            assert color.alpha() == 255
+            assert max(color.red(), color.green(), color.blue()) < 100, color.name()
+            text = view.palette().color(QPalette.Text)
+            assert min(text.red(), text.green(), text.blue()) > 180
+            view.setCurrentIndex(combo.model().index(row, 0))
+            app.processEvents()
+            selected = view.window().grab().toImage().pixelColor(point)
+            assert selected != color
+            assert max(selected.red(), selected.green(), selected.blue()) < 160
+            selected_text = view.palette().color(QPalette.HighlightedText)
+            assert min(selected_text.red(), selected_text.green(), selected_text.blue()) > 180
+            combo.hidePopup()
+    finally:
+        host.close()
+        app.setStyle(previous_style)
 
 
 def test_new_and_missing_settings_use_reliable_runtime_defaults(tmp_path):
