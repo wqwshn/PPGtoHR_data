@@ -11,7 +11,7 @@ from PyQt5.QtCore import QThread, pyqtSignal, pyqtSlot
 from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import (QGroupBox, QVBoxLayout, QHBoxLayout, QComboBox,
                             QPushButton, QLabel, QTableWidget, QTableWidgetItem,
-                            QHeaderView, QAbstractItemView, QPlainTextEdit)
+                            QHeaderView, QAbstractItemView, QPlainTextEdit, QListView)
 
 CHECK_ITEMS = ("MIMU ACC/GYRO", "MIMU MAG", "ADC ADS124S06", "PPG2 MAX30101", "BLE HJ-131IMH")
 
@@ -128,6 +128,7 @@ class BoardCheckPanel(QGroupBox):
         root = QVBoxLayout(self)
         row = QHBoxLayout()
         self.port = QComboBox()
+        self.port.setView(QListView(self.port))
         self.port.setMinimumWidth(150)
         self.refresh_button = QPushButton("刷新串口")
         self.connect_button = QPushButton("连接检查串口")

@@ -21,13 +21,17 @@ from rf_events import parse_rf_event
 import serial_reader
 
 
-def test_recording_keeps_snr_raw_marker_and_rf_together(tmp_path):
+@pytest.mark.parametrize("token,subject,directory,filename", [
+    ("rest", "TEST", "0915-TEST", "rest1_TEST_0915.csv"),
+    ("huayi", "", "20260915", "huayi1_20260915.csv")])
+def test_recording_keeps_snr_raw_marker_and_rf_together(tmp_path, token, subject, directory, filename):
     app = QApplication.instance() or QApplication([])
     win = Workbench()
     panel = win.monitor._raw_panel
-    metadata = RecordingMetadata(tmp_path, "kaiji", 1, "TEST", date(2026, 9, 15))
+    metadata = RecordingMetadata(tmp_path, token, 1, subject, date(2026, 9, 15))
     win.monitor._raw_recording_metadata = metadata
     paths = build_recording_paths(metadata)
+    assert paths.raw_path == tmp_path / directory / filename
     try:
         win.monitor._btn_record.click()
         assert panel.is_recording

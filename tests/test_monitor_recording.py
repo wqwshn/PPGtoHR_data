@@ -206,7 +206,7 @@ def test_raw_recording_requires_a_prevalidated_raw_path(tmp_path):
 
 def test_raw_recording_uses_prevalidated_metadata_path(tmp_path):
     panel = _raw_panel()
-    raw_path = tmp_path / "202607-multiperson" / "0710-LYX" / "kaiji1_LYX_0710.csv"
+    raw_path = tmp_path / "20260710" / "kaiji1_20260710.csv"
 
     assert raw_data_panel.RawDataPanel._toggle_record(panel, raw_path=raw_path) is True
     raw, status, marker = raw_data_panel.recording_output_paths(raw_path)

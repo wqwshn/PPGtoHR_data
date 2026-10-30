@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 
 
-SCENARIO_OPTIONS: tuple[tuple[str, str], ...] = (
+MOTION_SCENARIOS: tuple[tuple[str, str], ...] = (
     ("波比跳", "bobi"),
     ("敲键盘", "jianpan"),
     ("开合跳", "kaihe"),
@@ -22,13 +22,22 @@ SCENARIO_OPTIONS: tuple[tuple[str, str], ...] = (
     ("仰卧起坐", "yangwo"),
     ("快速出拳", "quanji"),
     ("高抬腿", "gaotai"),
+)
+SIGNAL_SCENARIOS: tuple[tuple[str, str], ...] = (
     ("开机", "kaiji"),
     ("温漂测试", "wenpiao"),
     ("接近度/接触压力测试（上到下：接触压力→接近度）", "PnP_down"),
     ("接近度/接触压力测试（下到上：接近度→接触压力）", "PnP_up"),
+    ("滑移测试", "huayi"),
 )
+SCENARIO_OPTIONS = MOTION_SCENARIOS + SIGNAL_SCENARIOS
 _SCENARIO_TOKENS = frozenset(token for _, token in SCENARIO_OPTIONS)
+_SIGNAL_TOKENS = frozenset(token for _, token in SIGNAL_SCENARIOS)
 _SUBJECT_RE = re.compile(r"^[A-Z]{1,8}$")
+
+
+def is_signal_scenario(token: str) -> bool:
+    return token in _SIGNAL_TOKENS
 
 
 @dataclass(frozen=True)
@@ -60,7 +69,7 @@ def validate_metadata(metadata: RecordingMetadata) -> None:
         raise ValueError("实验场景无效")
     if not isinstance(metadata.trial, int) or isinstance(metadata.trial, bool) or metadata.trial < 1:
         raise ValueError("实验编号必须是正整数")
-    if not _SUBJECT_RE.fullmatch(metadata.subject):
+    if not is_signal_scenario(metadata.scenario_token) and not _SUBJECT_RE.fullmatch(metadata.subject):
         raise ValueError("受试者缩写必须为 1–8 位大写 ASCII 字母")
     if not isinstance(metadata.record_date, date):
         raise ValueError("实验日期无效")
@@ -69,10 +78,14 @@ def validate_metadata(metadata: RecordingMetadata) -> None:
 def build_recording_paths(metadata: RecordingMetadata) -> RecordingPaths:
     """Build the Raw CSV family paths without creating any filesystem entries."""
     validate_metadata(metadata)
-    month = metadata.record_date.strftime("%Y%m")
-    day = metadata.record_date.strftime("%m%d")
-    directory = Path(metadata.save_root) / f"{month}-multiperson" / f"{day}-{metadata.subject}"
-    stem = f"{metadata.scenario_token}{metadata.trial}_{metadata.subject}_{day}"
+    if is_signal_scenario(metadata.scenario_token):
+        day = metadata.record_date.strftime("%Y%m%d")
+        directory = Path(metadata.save_root) / day
+        stem = f"{metadata.scenario_token}{metadata.trial}_{day}"
+    else:
+        day = metadata.record_date.strftime("%m%d")
+        directory = Path(metadata.save_root) / f"{day}-{metadata.subject}"
+        stem = f"{metadata.scenario_token}{metadata.trial}_{metadata.subject}_{day}"
     raw_path = directory / f"{stem}.csv"
     return RecordingPaths(
         directory=directory,
@@ -87,10 +100,10 @@ def suggest_next_trial(metadata: RecordingMetadata) -> int:
     paths = build_recording_paths(metadata)
     if not paths.directory.is_dir():
         return 1
-    day = metadata.record_date.strftime("%m%d")
+    prefix = f"{metadata.scenario_token}{metadata.trial}"
+    suffix = paths.raw_path.name[len(prefix):]
     pattern = re.compile(
-        rf"^{re.escape(metadata.scenario_token)}(\d+)_"
-        rf"{re.escape(metadata.subject)}_{day}\.csv$"
+        rf"^{re.escape(metadata.scenario_token)}(\d+){re.escape(suffix)}$"
     )
     trials = [
         int(match.group(1))

@@ -28,13 +28,14 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QPushButton, QProgressBar, QStatusBar,
     QFrame, QFileDialog, QStackedWidget, QButtonGroup,
     QDateEdit, QDialog, QDialogButtonBox, QFormLayout, QLineEdit,
-    QMessageBox, QSpinBox, QSizePolicy, QPlainTextEdit,
+    QMessageBox, QSpinBox, QSizePolicy, QPlainTextEdit, QListView, QTabBar,
 )
 import pyqtgraph as pg
 
 from protocol import HRPacket
 from recording_naming import (
-    SCENARIO_OPTIONS,
+    MOTION_SCENARIOS, SIGNAL_SCENARIOS,
+    is_signal_scenario,
     RecordingMetadata,
     build_recording_paths,
     ensure_recording_available,
@@ -78,6 +79,9 @@ TRANSLATIONS = {
         "recording_info": "实验信息",
         "recording_info_title": "Raw 录制实验信息",
         "recording_root": "保存根目录",
+        "recording_type": "实验类型",
+        "recording_motion": "运动场景采集实验",
+        "recording_signal": "信号性能实验",
         "recording_scenario": "实验场景",
         "recording_trial": "实验编号",
         "recording_subject": "受试者缩写",
@@ -150,6 +154,9 @@ TRANSLATIONS = {
         "recording_info": "Experiment Info",
         "recording_info_title": "Raw Recording Information",
         "recording_root": "Save root",
+        "recording_type": "Experiment type",
+        "recording_motion": "Motion collection",
+        "recording_signal": "Signal performance",
         "recording_scenario": "Scenario",
         "recording_trial": "Trial",
         "recording_subject": "Subject initials",
@@ -210,6 +217,15 @@ TRANSLATIONS = {
     },
 }
 
+COMBO_POPUP_QSS = """
+QComboBox QAbstractItemView { background: #1B2A39; color: #E4EDF5;
+    border: 1px solid #466278; padding: 4px;
+    selection-background-color: #24566C; selection-color: #FFFFFF;
+    outline: none; }
+QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 10px; }
+QComboBox QAbstractItemView::item:selected { background: #24566C; color: #FFFFFF; }
+"""
+
 DARK_QSS = f"""
 QMainWindow, QWidget {{
     background-color: {COLOR_BG};
@@ -257,11 +273,6 @@ QComboBox {{
 QComboBox::drop-down {{
     border: none;
 }}
-QComboBox QAbstractItemView {{
-    background-color: {COLOR_CARD};
-    color: {COLOR_TEXT};
-    selection-background-color: {COLOR_PRIMARY};
-}}
 QStatusBar {{
     background-color: #0A1520;
     color: {COLOR_TEXT_DIM};
@@ -300,7 +311,7 @@ QPushButton#btn_panel_switch:checked {{
 QPushButton#btn_panel_switch:hover {{
     background-color: #0EA5C9;
 }}
-"""
+""" + COMBO_POPUP_QSS
 
 
 def ui_font(size: int = 10) -> QFont:
@@ -375,6 +386,7 @@ class RecordingInfoDialog(QDialog):
         t = TRANSLATIONS[lang]
         self.setWindowTitle(t["recording_info_title"])
         self.setModal(True)
+        self.setMinimumWidth(720)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -388,14 +400,25 @@ class RecordingInfoDialog(QDialog):
         root_layout.addWidget(self._root_input, 1)
         browse_button = QPushButton("...")
         browse_button.setFixedWidth(32)
+        browse_button.setStyleSheet("QPushButton { padding: 4px 6px; }")
         browse_button.clicked.connect(self._browse_root)
         root_layout.addWidget(browse_button)
         form.addRow(t["recording_root"], root_row)
 
+        self._experiment_type = QTabBar()
+        self._experiment_type.addTab(t["recording_motion"])
+        self._experiment_type.addTab(t["recording_signal"])
+        self._experiment_type.setExpanding(True)
+        self._experiment_type.setDrawBase(False)
+        self._experiment_type.setStyleSheet("""
+            QTabBar::tab { background: #1B2A39; color: #A9BED0;
+                border: 1px solid #344B60; padding: 9px 16px; }
+            QTabBar::tab:selected { background: #24566C; color: #FFFFFF;
+                border-color: #54B3CC; }
+        """)
+        form.addRow(t["recording_type"], self._experiment_type)
         self._scenario = QComboBox()
-        self._scenario.addItem("--", None)
-        for label, token in SCENARIO_OPTIONS:
-            self._scenario.addItem(f"{label} ({token})", token)
+        self._scenario.setView(QListView(self._scenario))
         form.addRow(t["recording_scenario"], self._scenario)
 
         self._trial = QSpinBox()
@@ -405,7 +428,8 @@ class RecordingInfoDialog(QDialog):
         self._subject = QLineEdit()
         self._subject.setMaxLength(8)
         self._subject.setPlaceholderText("LYX")
-        form.addRow(t["recording_subject"], self._subject)
+        self._subject_label = QLabel(t["recording_subject"])
+        form.addRow(self._subject_label, self._subject)
 
         self._record_date = QDateEdit(QDate.currentDate())
         self._record_date.setCalendarPopup(True)
@@ -414,8 +438,10 @@ class RecordingInfoDialog(QDialog):
 
         self._directory_preview = QLabel("--")
         self._directory_preview.setWordWrap(True)
+        self._directory_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self._file_preview = QLabel("--")
         self._file_preview.setWordWrap(True)
+        self._file_preview.setTextInteractionFlags(Qt.TextSelectableByMouse)
         form.addRow(t["recording_preview"], self._directory_preview)
         form.addRow("", self._file_preview)
 
@@ -424,8 +450,12 @@ class RecordingInfoDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+        self._experiment_type.currentChanged.connect(self._set_experiment_type)
+        self._set_experiment_type(0)
         if metadata is not None:
             self._root_input.setText(str(metadata.save_root))
+            self._experiment_type.setCurrentIndex(
+                1 if is_signal_scenario(metadata.scenario_token) else 0)
             scenario_index = self._scenario.findData(metadata.scenario_token)
             self._scenario.setCurrentIndex(max(scenario_index, 0))
             self._trial.setValue(metadata.trial)
@@ -444,6 +474,18 @@ class RecordingInfoDialog(QDialog):
     @property
     def recording_metadata(self) -> Optional[RecordingMetadata]:
         return self._confirmed_metadata
+
+    def _set_experiment_type(self, index: int) -> None:
+        options = (MOTION_SCENARIOS, SIGNAL_SCENARIOS)[index]
+        self._subject.setVisible(index == 0)
+        self._subject_label.setVisible(index == 0)
+        self._scenario.blockSignals(True)
+        self._scenario.clear()
+        self._scenario.addItem("--", None)
+        for label, token in options:
+            self._scenario.addItem(f"{label} ({token})", token)
+        self._scenario.blockSignals(False)
+        self._suggest_trial()
 
     def _browse_root(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -464,7 +506,7 @@ class RecordingInfoDialog(QDialog):
             save_root=Path(self._root_input.text()),
             scenario_token=self._scenario.currentData(),
             trial=self._trial.value(),
-            subject=self._subject.text().strip(),
+            subject=self._subject.text().strip() if self._experiment_type.currentIndex() == 0 else "",
             record_date=date(selected_date.year(), selected_date.month(), selected_date.day()),
         )
 
@@ -595,6 +637,7 @@ class MonitorWindow(QMainWindow):
         self._page_title.setStyleSheet("color: #AAB9CA; font-size: 10pt; padding: 0 8px;")
         layout.addWidget(self._page_title)
         self._combo_port = QComboBox()
+        self._combo_port.setView(QListView(self._combo_port))
         self._combo_port.setFixedWidth(100)
         self._combo_port.setFixedHeight(30)
         layout.addWidget(self._combo_port)

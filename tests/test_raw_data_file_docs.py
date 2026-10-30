@@ -10,7 +10,8 @@ def test_raw_data_file_structure_doc_describes_metadata_based_recording_outputs(
 
     for filename in [
         "<scenario><trial>_<SUBJECT>_<MMDD>.csv",
-        "kaiji1_LYX_0710.csv",
+        "run1_LYX_0710.csv",
+        "huayi1_20261027.csv",
         "_status.csv",
         "至少一次",
         "ValidFlag",

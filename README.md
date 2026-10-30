@@ -14,6 +14,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_monitor.ps1
 
 安装脚本只创建/复用项目`.venv`、安装已验证版本的依赖并运行模拟检查，不连接串口或烧录。正常使用双击 **`start.bat`**；停止模拟后再选择真实COM口连接（115200、8N1）。先填写“实验信息”，再开始录制。普通ST-Link/V2的SWD接口不提供采集串口。
 
+实验信息分为“运动场景采集实验”和“信号性能实验”。运动录制保存在 `recordings/MMDD-SUBJECT/run1_SUBJECT_MMDD.csv`；信号性能无需填写受试者，保存在 `recordings/YYYYMMDD/huayi1_YYYYMMDD.csv`（滑移测试 token 为 `huayi`）。保存根目录可自行选择，不再自动添加 `YYYYMM-multiperson` 文件夹，原有数据不移动。完整命名与伴随文件见[原始数据录制文件结构说明](docs/acquisition/原始数据录制文件结构说明.md)。
+
 启动器优先使用项目`.venv`，保留旧`tools/monitor/start_monitor.bat`兼容入口；可用`PPG_PYTHON`指定解释器。完整步骤见[工作台使用说明](docs/统一工作台使用说明.md)。
 
 ## 交给 agent 配置环境

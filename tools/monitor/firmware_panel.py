@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
 
 from firmware_build import (ROOT, BUILD, FirmwareSettings, tool_environment,
                             find_tools, flash_args, OPENOCD_CONFIG)
-from dashboard import ui_font
+from dashboard import ui_font, COMBO_POPUP_QSS
 from board_check_panel import BoardCheckPanel
 from debug_logging import LogTools, append_log_text
 
@@ -42,19 +42,13 @@ class FirmwarePanel(QWidget):
             QComboBox { background: #1B2A39; border: 1px solid #344B60;
                 border-radius: 6px; padding: 6px 10px; color: #E4EDF5; }
             QComboBox:focus { border-color: #54B3CC; }
-            QComboBox QAbstractItemView { background: #1B2A39; color: #E4EDF5;
-                border: 1px solid #466278; padding: 4px;
-                selection-background-color: #24566C; selection-color: #FFFFFF;
-                outline: none; }
-            QComboBox QAbstractItemView::item { min-height: 26px; padding: 4px 10px; }
-            QComboBox QAbstractItemView::item:selected { background: #24566C; color: #FFFFFF; }
             QPushButton { background: #1A2B3C; border: 1px solid #36516A;
                 border-radius: 6px; padding: 7px 13px; color: #DCE9F4; }
             QPushButton:hover { background: #243E54; border-color: #64B5CC; }
             QPushButton:disabled { color: #657B90; border-color: #263646; }
             QToolButton { color: #8CBFD8; padding: 8px 2px; border: none; text-align: left; }
             QCheckBox { color: #DCE9F4; spacing: 8px; }
-        """)
+        """ + COMBO_POPUP_QSS)
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 18, 22, 16)
         root.setSpacing(12)
